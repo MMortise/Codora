@@ -136,6 +136,35 @@ void main() {
     expect(find.textContaining('这个地址用不了'), findsNothing);
   });
 
+  testWidgets('清除凭据 sits beside whatever sets the credential', (tester) async {
+    await openSettings(tester,
+        settings: const AppSettings(
+            v2exToken: 'abc', linuxdoCookie: 'cf_clearance=abc'));
+
+    // V2EX's credential is typed, so clearing belongs after that field's 保存.
+    final save = find.descendant(
+        of: cardFor('V2EX'), matching: find.widgetWithText(FilledButton, '保存'));
+    final clear = find.descendant(
+        of: cardFor('V2EX'),
+        matching: find.widgetWithText(OutlinedButton, '清除凭据'));
+    expect(tester.getRect(clear).left,
+        greaterThan(tester.getRect(save.first).right),
+        reason: 'clearing goes to the right of saving, on the same row');
+    expect(tester.getRect(clear).top, tester.getRect(save.first).top);
+
+    // Linux.do earns its credential in a browser, so clearing stays with the
+    // button that opens one — there is no field of its own to sit beside.
+    final verify = find.descendant(
+        of: cardFor('Linux.do'),
+        matching: find.widgetWithText(FilledButton, '重新验证'));
+    final ldClear = find.descendant(
+        of: cardFor('Linux.do'),
+        matching: find.widgetWithText(OutlinedButton, '清除凭据'));
+    expect(tester.getRect(ldClear).left,
+        greaterThan(tester.getRect(verify).right));
+    expect(tester.getRect(ldClear).top, tester.getRect(verify).top);
+  });
+
   testWidgets('only V2EX offers a proxy', (tester) async {
     await openSettings(tester);
     expect(find.text('代理'), findsOneWidget);
