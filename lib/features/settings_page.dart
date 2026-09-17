@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app_theme.dart';
 import '../core/forum_source.dart';
 import '../core/models.dart';
+import '../core/proxy.dart';
 import '../core/read_log.dart';
 import '../core/settings.dart';
 import '../widgets/chrome.dart';
@@ -274,7 +275,9 @@ class _V2exProxy extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasProxy = settings.v2exProxy.trim().isNotEmpty;
+    final typed = settings.v2exProxy.trim();
+    final proxy = SiteProxy.parse(typed);
+    final hasProxy = proxy != null;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const SizedBox(height: 18),
@@ -283,8 +286,9 @@ class _V2exProxy extends StatelessWidget {
       Text('代理', style: Theme.of(context).textTheme.titleMedium),
       const SizedBox(height: 4),
       Text(
-        '能直连就留空。填上以后 V2EX 的接口和网页都从这里走；地址可以是前缀形式 '
-        'https://p.example.com/，也可以用 {url} 或 {encoded_url} 指明目标地址放在哪。',
+        '能直连就留空。填上以后 V2EX 的接口、网页和图片都从这里走。'
+        '常见的是本机或局域网的代理，写成 127.0.0.1:7890 这样的地址就行；'
+        '如果用的是替你转发的服务，用 {url} 或 {encoded_url} 指明目标地址放在哪。',
         style: Theme.of(context).textTheme.bodySmall,
       ),
       const SizedBox(height: 14),
@@ -299,6 +303,14 @@ class _V2exProxy extends StatelessWidget {
           },
         ),
       ),
+      if (typed.isNotEmpty && proxy == null) ...[
+        const SizedBox(height: 8),
+        Text('这个地址用不了，V2EX 还在直连。支持 host:port，或带 http:// 的地址。',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: context.palette.rose)),
+      ],
       const SizedBox(height: 14),
       _ToggleRow(
         title: '图片也走代理',
@@ -306,7 +318,7 @@ class _V2exProxy extends StatelessWidget {
         // used, so this is a separate decision from proxying the forum.
         subtitle: hasProxy
             ? '帖子里的图片和头像也通过代理加载，包括 v2ex.com 以外的图床。'
-            : '先填代理地址，才能让图片也走代理。',
+            : '先填一个能用的代理地址，才能让图片也走代理。',
         value: hasProxy && settings.v2exProxyImages,
         onChanged: hasProxy
             ? (v) => notifier.patch((x) => x.copyWith(v2exProxyImages: v))
@@ -459,7 +471,11 @@ class SiteCard extends StatelessWidget {
                   title: Text('手动填写',
                       style: TextStyle(fontSize: 13, color: p.inkMuted)),
                   tilePadding: EdgeInsets.zero,
-                  childrenPadding: const EdgeInsets.only(bottom: 6),
+                  // A floating label sits astride its field's top border, so
+                  // it reaches above the field's own box. The disclosure clips
+                  // its body to animate open, which would cut the first
+                  // field's label in half without room above it.
+                  childrenPadding: const EdgeInsets.only(top: 8, bottom: 6),
                   expandedCrossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     for (final field in advanced)
@@ -540,14 +556,12 @@ class _FieldRowState extends State<_FieldRow> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // A single-line field is pinned to the shared control height so it and
-        // the button beside it are exactly the same size; a multi-line field
-        // grows downward from that same top edge.
-        Expanded(
-          child: f.lines == 1
-              ? SizedBox(height: kControlHeight, child: field)
-              : field,
-        ),
+        // The field's floor is the shared control height, set on the theme's
+        // decoration, so it starts out exactly as tall as the button beside it
+        // and grows downward from that same top edge — when it holds several
+        // lines, and when the reader's text is scaled up. Pinning it to an
+        // exact height instead would squash the latter.
+        Expanded(child: field),
         const SizedBox(width: 8),
         SizedBox(
           height: kControlHeight,

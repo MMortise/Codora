@@ -274,8 +274,10 @@ ThemeData buildTheme(Brightness brightness) {
       filled: true,
       fillColor: p.canvas,
       isDense: true,
-      // Single-line fields land exactly on kControlHeight; a multi-line field
-      // grows from the same top and bottom inset.
+      // A single-line field lands on kControlHeight, the same height as the
+      // buttons it sits beside; the floor keeps it there even when a larger
+      // text scale would otherwise make it shorter than them, and a
+      // multi-line field grows from the same top and bottom inset.
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       constraints: const BoxConstraints(minHeight: kControlHeight),
       labelStyle: TextStyle(color: p.inkMuted, fontSize: 13),

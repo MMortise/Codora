@@ -66,9 +66,4 @@ class SiteImages {
 
   /// The address to actually request for [raw].
   Uri url(Uri raw) => rewrite?.call(raw) ?? raw;
-
-  /// The same pictures fetched directly, for a reader who wants the proxy for
-  /// the site but not for everything it links.
-  SiteImages get unproxied =>
-      rewrite == null ? this : SiteImages(loader: loader);
 }
