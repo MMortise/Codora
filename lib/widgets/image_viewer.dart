@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
+import '../core/forum_source.dart';
 import 'post_image.dart';
 import 'site_image.dart';
 
@@ -19,8 +20,7 @@ Future<void> showImageViewer(
   BuildContext context, {
   required Uri url,
   String? alt,
-  Map<String, String>? headers,
-  Future<Uint8List>? Function(Uri url)? loader,
+  SiteImages images = SiteImages.plain,
 }) {
   return showGeneralDialog(
     context: context,
@@ -29,7 +29,7 @@ Future<void> showImageViewer(
     barrierColor: Colors.black.withValues(alpha: 0.82),
     transitionDuration: Motion.swap,
     pageBuilder: (context, _, _) =>
-        _ImageViewer(url: url, alt: alt, headers: headers, loader: loader),
+        _ImageViewer(url: url, alt: alt, images: images),
     transitionBuilder: (context, animation, _, child) {
       final curved = CurvedAnimation(parent: animation, curve: Motion.curve);
       return FadeTransition(
@@ -53,12 +53,11 @@ enum ViewerMode {
 }
 
 class _ImageViewer extends StatefulWidget {
-  const _ImageViewer({required this.url, this.alt, this.headers, this.loader});
+  const _ImageViewer({required this.url, this.alt, required this.images});
 
   final Uri url;
   final String? alt;
-  final Map<String, String>? headers;
-  final Future<Uint8List>? Function(Uri url)? loader;
+  final SiteImages images;
 
   @override
   State<_ImageViewer> createState() => _ImageViewerState();
@@ -75,8 +74,7 @@ class _ImageViewerState extends State<_ImageViewer> {
   @override
   void initState() {
     super.initState();
-    _provider = resolveImageProvider(widget.url,
-        headers: widget.headers, loader: widget.loader);
+    _provider = resolveImageProvider(widget.url, images: widget.images);
     _measure();
   }
 

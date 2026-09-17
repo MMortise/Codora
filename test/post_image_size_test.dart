@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:codora/app_theme.dart';
+import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/widgets/post_body.dart';
 import 'package:flutter/material.dart';
@@ -40,7 +41,7 @@ Future<void> pumpPost(
               content: content,
               format: format,
               baseUrl: Uri.parse('https://linux.do'),
-              imageLoader: (_) async => bytes,
+              images: SiteImages(loader: (_) async => bytes),
             ),
           ),
         ),

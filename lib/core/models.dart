@@ -202,12 +202,18 @@ enum AuthRecovery {
   settings,
 }
 
-/// Thrown when a site needs the user to (re)authenticate or pass a challenge.
+/// Thrown when a site needs something from the reader before it will load —
+/// a login, a challenge passed, a credential, or an address to reach it by.
 class AuthRequiredException implements Exception {
-  AuthRequiredException(this.site, this.message, this.recovery);
+  AuthRequiredException(this.site, this.message, this.recovery, {this.hint});
   final SiteId site;
   final String message;
   final AuthRecovery recovery;
+
+  /// Replaces the generic line under [message]. A site supplies one when the
+  /// fix is not the usual "update your credentials" — a proxy address, say.
+  final String? hint;
+
   @override
   String toString() => message;
 }

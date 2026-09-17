@@ -34,16 +34,41 @@ abstract class ForumSource {
 
   Future<PageResult<Reply>> fetchReplies(String topicId, {String? cursor});
 
-  /// Extra headers needed to load this site's images, if any.
-  Map<String, String>? get imageHeaders => null;
-
-  /// Sites where some images need special handling return a loader here.
+  /// How this site's pictures are reached. Most sites need nothing here.
   ///
-  /// The loader is asked per URL and may return null, meaning "a plain network
-  /// request reaches this one". That matters for forums that serve posts from
-  /// a protected domain but their pictures from an open CDN.
-  Future<Uint8List>? Function(Uri url)? get imageLoader => null;
+  /// Implementations should hand back the same instance every time: the image
+  /// widgets restart a load when it changes, so a fresh object per call would
+  /// refetch every avatar on every rebuild.
+  SiteImages get images => SiteImages.plain;
 
   /// If [uri] points at a topic on this site, return its id.
   String? topicIdFromUrl(Uri uri);
+}
+
+/// How a site's pictures are fetched.
+///
+/// Two ways to depart from a plain `GET`, in the order they apply: the address
+/// can be [rewrite]n (a proxy), and the bytes can be fetched by something
+/// other than the network stack via [loader] — which is what a site behind a
+/// browser challenge needs.
+class SiteImages {
+  const SiteImages({this.loader, this.rewrite});
+
+  /// A site whose pictures load with an ordinary request.
+  static const plain = SiteImages();
+
+  /// Asked per URL, and may return null meaning "a plain request reaches this
+  /// one". That matters for forums serving posts from a protected domain but
+  /// their pictures from an open CDN.
+  final Future<Uint8List>? Function(Uri url)? loader;
+
+  final Uri Function(Uri url)? rewrite;
+
+  /// The address to actually request for [raw].
+  Uri url(Uri raw) => rewrite?.call(raw) ?? raw;
+
+  /// The same pictures fetched directly, for a reader who wants the proxy for
+  /// the site but not for everything it links.
+  SiteImages get unproxied =>
+      rewrite == null ? this : SiteImages(loader: loader);
 }

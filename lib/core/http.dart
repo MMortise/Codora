@@ -1,7 +1,17 @@
 import 'package:dio/dio.dart';
 
-Dio buildDio({required String baseUrl, Map<String, String>? headers}) {
-  return Dio(BaseOptions(
+import 'proxy.dart';
+
+/// The one HTTP client every site is built on: shared timeouts, headers and
+/// the rule that only a 5xx is an exception.
+///
+/// [proxy], when given, routes everything this client sends through it.
+Dio buildDio({
+  required String baseUrl,
+  Map<String, String>? headers,
+  UrlProxy? proxy,
+}) {
+  final dio = Dio(BaseOptions(
     baseUrl: baseUrl,
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 30),
@@ -13,6 +23,27 @@ Dio buildDio({required String baseUrl, Map<String, String>? headers}) {
     responseType: ResponseType.json,
     validateStatus: (s) => s != null && s < 500,
   ));
+  if (proxy != null) dio.interceptors.add(_ProxyInterceptor(proxy));
+  return dio;
+}
+
+/// Hands the proxy the fully resolved address.
+///
+/// The rewrite has to happen here, at the last moment, rather than on the base
+/// URL: Dio only appends the query string when it builds `options.uri`, so
+/// rewriting any earlier would leave `?id=123` dangling outside the address
+/// the proxy was given. An absolute path bypasses `baseUrl`, and the query is
+/// cleared because it is now part of that path.
+class _ProxyInterceptor extends Interceptor {
+  _ProxyInterceptor(this.proxy);
+  final UrlProxy proxy;
+
+  @override
+  void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    options.path = proxy.applyTo(options.uri.toString());
+    options.queryParameters = const {};
+    handler.next(options);
+  }
 }
 
 int? asInt(Object? v) {

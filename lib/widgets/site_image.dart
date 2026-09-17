@@ -2,26 +2,28 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../core/forum_source.dart';
+
 /// One way to put a remote image on screen for every site.
 ///
-/// Most sites load fine with a plain network request. A site whose images sit
-/// behind the same protection as its API supplies a [loader] instead, and
-/// nothing else about the call site changes.
+/// Most sites load fine with a plain network request. A site read through a
+/// proxy, or one whose images sit behind the same protection as its API, says
+/// so in its [SiteImages]; nothing else about the call site changes.
 class SiteImage extends StatefulWidget {
   const SiteImage({
     super.key,
     required this.url,
-    this.headers,
-    this.loader,
+    this.images = SiteImages.plain,
     this.width,
     this.height,
     this.fit,
     required this.fallback,
   });
 
+  /// The address the site published. What is actually requested is this put
+  /// through [images].
   final Uri url;
-  final Map<String, String>? headers;
-  final Future<Uint8List>? Function(Uri url)? loader;
+  final SiteImages images;
   final double? width;
   final double? height;
   final BoxFit? fit;
@@ -35,6 +37,7 @@ class SiteImage extends StatefulWidget {
 
 class _SiteImageState extends State<SiteImage> {
   Future<Uint8List>? _future;
+  late Uri _target;
 
   @override
   void initState() {
@@ -45,22 +48,22 @@ class _SiteImageState extends State<SiteImage> {
   @override
   void didUpdateWidget(covariant SiteImage old) {
     super.didUpdateWidget(old);
-    if (old.url != widget.url || old.loader != widget.loader) _start();
+    if (old.url != widget.url || old.images != widget.images) _start();
   }
 
   void _start() {
-    _future = widget.loader?.call(widget.url);
+    _target = widget.images.url(widget.url);
+    _future = widget.images.loader?.call(_target);
   }
 
   @override
   Widget build(BuildContext context) {
     if (_future == null) {
       return Image.network(
-        widget.url.toString(),
+        _target.toString(),
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
-        headers: widget.headers,
         // Until the first frame decodes, show the fallback rather than a hole
         // in the layout.
         frameBuilder: (_, child, frame, wasSynchronouslyLoaded) =>
@@ -97,10 +100,10 @@ class _SiteImageState extends State<SiteImage> {
 /// picture's real dimensions before deciding how to lay it out.
 Future<ImageProvider> resolveImageProvider(
   Uri url, {
-  Map<String, String>? headers,
-  Future<Uint8List>? Function(Uri url)? loader,
+  SiteImages images = SiteImages.plain,
 }) async {
-  final bytes = loader?.call(url);
+  final target = images.url(url);
+  final bytes = images.loader?.call(target);
   if (bytes != null) return MemoryImage(await bytes);
-  return NetworkImage(url.toString(), headers: headers);
+  return NetworkImage(target.toString());
 }

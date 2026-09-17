@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
+import '../core/forum_source.dart';
 import '../core/models.dart';
 import '../core/util.dart';
 import '../widgets/avatar.dart';
@@ -185,11 +186,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     return true;
   }
 
-  Map<String, String>? get _imageHeaders =>
-      ref.read(siteImageHeadersProvider(widget.topic.site));
-
-  Future<Uint8List>? Function(Uri)? get _imageLoader =>
-      ref.read(siteImageLoaderProvider(widget.topic.site));
+  SiteImages get _images => ref.read(siteImagesProvider(widget.topic.site));
 
   void _reload() {
     ref.invalidate(topicDetailProvider(widget.topic));
@@ -265,10 +262,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(30, 26, 30, 0),
                   sliver: SliverToBoxAdapter(
-                      child: PostHeader(
-                          detail: d,
-                          imageHeaders: _imageHeaders,
-                          imageLoader: _imageLoader)),
+                      child: PostHeader(detail: d, images: _images)),
                 ),
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(30, 0, 30, 20),
@@ -279,8 +273,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                         format: d.format,
                         baseUrl: source.homeUrl,
                         onTopicLink: _handleLink,
-                        imageHeaders: _imageHeaders,
-                        imageLoader: _imageLoader,
+                        images: _images,
                       ),
                     ),
                   ),
@@ -340,8 +333,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
             reply: r.items[i],
             baseUrl: baseUrl,
             onTopicLink: _handleLink,
-            imageHeaders: _imageHeaders,
-            imageLoader: _imageLoader,
+            images: _images,
           ),
         ),
         SliverToBoxAdapter(
@@ -376,10 +368,9 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
 /// Title, author and stats above a post body.
 class PostHeader extends StatelessWidget {
   const PostHeader(
-      {super.key, required this.detail, this.imageHeaders, this.imageLoader});
+      {super.key, required this.detail, this.images = SiteImages.plain});
   final TopicDetail detail;
-  final Map<String, String>? imageHeaders;
-  final Future<Uint8List>? Function(Uri url)? imageLoader;
+  final SiteImages images;
 
   @override
   Widget build(BuildContext context) {
@@ -417,8 +408,7 @@ class PostHeader extends StatelessWidget {
                           url: a.avatarUrl,
                           name: a.name,
                           size: 30,
-                          headers: imageHeaders,
-                          loader: imageLoader),
+                          images: images),
                       const SizedBox(width: 10),
                       Flexible(
                         child: Column(
@@ -469,16 +459,14 @@ class ReplyTile extends StatelessWidget {
     required this.reply,
     required this.baseUrl,
     required this.onTopicLink,
-    this.imageHeaders,
-    this.imageLoader,
+    this.images = SiteImages.plain,
     this.nested = false,
   });
 
   final Reply reply;
   final Uri baseUrl;
   final bool Function(Uri) onTopicLink;
-  final Map<String, String>? imageHeaders;
-  final Future<Uint8List>? Function(Uri url)? imageLoader;
+  final SiteImages images;
   final bool nested;
 
   @override
@@ -495,8 +483,7 @@ class ReplyTile extends StatelessWidget {
                 url: a?.avatarUrl,
                 name: a?.name ?? '?',
                 size: nested ? 18 : 24,
-                headers: imageHeaders,
-                loader: imageLoader),
+                images: images),
             const SizedBox(width: 8),
             Flexible(
               child: Text(a?.name ?? '匿名',
@@ -539,8 +526,7 @@ class ReplyTile extends StatelessWidget {
             format: reply.format,
             baseUrl: baseUrl,
             onTopicLink: onTopicLink,
-            imageHeaders: imageHeaders,
-            imageLoader: imageLoader,
+            images: images,
             fontSize: 13.5,
           ),
         ),
@@ -558,8 +544,7 @@ class ReplyTile extends StatelessWidget {
               reply: child,
               baseUrl: baseUrl,
               onTopicLink: onTopicLink,
-              imageHeaders: imageHeaders,
-              imageLoader: imageLoader,
+              images: images,
               nested: true,
             ),
           ),

@@ -144,14 +144,16 @@ void main() {
     });
 
     test('loads images through the browser only once verified', () {
-      expect(LinuxDoSource(cookie: '', userAgent: kDesktopUserAgent).imageLoader,
+      expect(
+          LinuxDoSource(cookie: '', userAgent: kDesktopUserAgent)
+              .images
+              .loader,
           isNull);
-      expect(src.imageLoader, isNotNull);
-      expect(src.imageHeaders, isNull);
+      expect(src.images.loader, isNotNull);
     });
 
     test('only the forum domain goes through the browser', () {
-      final loader = src.imageLoader!;
+      final loader = src.images.loader!;
 
       // Posts and emoji live on the open CDN. Routing them through the
       // linux.do page would make them cross-origin requests and they would

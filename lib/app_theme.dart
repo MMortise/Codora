@@ -296,6 +296,25 @@ ThemeData buildTheme(Brightness brightness) {
       color: p.accent,
       linearMinHeight: 2,
     ),
+    // Material's default switch reads its off-state from `outline`, which is
+    // our hairline colour and all but invisible on the surface it sits on.
+    // On is the same accent fill every other selected control uses.
+    switchTheme: SwitchThemeData(
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      trackColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.disabled)) {
+          return p.raised.withValues(alpha: 0.5);
+        }
+        return states.contains(WidgetState.selected) ? p.accent : p.raised;
+      }),
+      trackOutlineColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.selected) ? p.accent : p.line),
+      thumbColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) return p.accentInk;
+        return states.contains(WidgetState.disabled) ? p.line : p.inkFaint;
+      }),
+      overlayColor: WidgetStatePropertyAll(p.accent.withValues(alpha: 0.10)),
+    ),
     textTheme: base.textTheme.copyWith(
       headlineMedium: TextStyle(
           fontSize: 27, height: 1.25, fontWeight: FontWeight.w600, color: p.ink, letterSpacing: -0.4),

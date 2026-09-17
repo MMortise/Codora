@@ -11,21 +11,28 @@ import '../core/read_log.dart';
 import '../core/settings.dart';
 import '../widgets/chrome.dart';
 import '../widgets/site_icon.dart';
+import '../widgets/swap.dart';
 import 'linuxdo_auth_page.dart';
 import 'providers.dart';
 
+/// Settings in two halves: the forums, one card each, and everything that is
+/// about the app rather than a site.
+///
 /// One card per site, built from the same [SiteCard] for all of them. What
-/// differs per site is declared as data in [_credentialsFor].
-class SettingsPage extends ConsumerWidget {
+/// differs per site is declared as data in [_fieldsFor].
+class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final p = context.palette;
+  ConsumerState<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends ConsumerState<SettingsPage> {
+  @override
+  Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final notifier = ref.read(settingsProvider.notifier);
-    final sources = ref.watch(allSourcesProvider);
-    final readLog = ref.watch(readLogProvider);
+    final tab = ref.watch(settingsTabProvider);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(4, 34, 34, 48),
@@ -34,107 +41,92 @@ class SettingsPage extends ConsumerWidget {
         const SizedBox(height: 6),
         Text('凭据只存在这台电脑上，不会离开本机。',
             style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 26),
-        Panel(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('外观', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 14),
-            Row(children: [
-              for (final (value, label) in const [
-                ('system', '跟随系统'),
-                ('dark', '深色'),
-                ('light', '浅色'),
-              ])
-                _Choice(
-                  label: label,
-                  selected: settings.themeMode == value,
-                  onTap: () => notifier.patch((s) => s.copyWith(themeMode: value)),
-                ),
-            ]),
-          ]),
+        const SizedBox(height: 22),
+        _Tabs(
+          current: tab,
+          onSelect: (t) => ref.read(settingsTabProvider.notifier).state = t,
         ),
-        Panel(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('阅读记录', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(
-              readLog.length == 0
-                  ? '还没有读过的帖子。读过的帖子会在列表里变暗。'
-                  : '记住了 ${readLog.length} 篇读过的帖子，最多保留 ${ReadLog.limit} 篇。',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 14),
-            SizedBox(
-              height: kControlHeight,
-              child: OutlinedButton(
-                onPressed: readLog.length == 0
-                    ? null
-                    : () => ref.read(readLogProvider.notifier).clear(),
-                child: const Text('清除阅读记录'),
-              ),
-            ),
-          ]),
-        ),
-        for (final source in sources)
-          SiteCard(
-            source: source,
-            credentials: _credentialsFor(source, settings, notifier, ref),
-            onOpenBrowser: source.id == SiteId.linuxdo && !Platform.isLinux
-                ? () => _openBrowser(context, ref, source.id)
-                : null,
-            onClear: _clearFor(source, settings, notifier, ref),
+        const SizedBox(height: 18),
+        Swap(
+          swapKey: tab,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: switch (tab) {
+              SettingsTab.forums => _forums(settings, notifier),
+              SettingsTab.general => _general(settings, notifier),
+            },
           ),
-        const SizedBox(height: 10),
-        Text('Codora · 只读聚合，不会代替你发帖或点赞',
-            style: TextStyle(fontSize: 11.5, color: p.inkFaint)),
+        ),
       ],
     );
   }
 
-  Future<void> _openBrowser(BuildContext context, WidgetRef ref, SiteId site) async {
-    final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
-        fullscreenDialog: true, builder: (_) => const LinuxDoAuthPage()));
-    if (ok == true) _reload(ref, site);
+  // ---------- 论坛 ----------
+
+  List<Widget> _forums(AppSettings settings, SettingsNotifier notifier) {
+    return [
+      for (final source in ref.watch(allSourcesProvider))
+        SiteCard(
+          source: source,
+          shown: settings.shows(source.id),
+          onShownChanged: (v) =>
+              notifier.patch((s) => s.withSiteShown(source.id, v)),
+          fields: _fieldsFor(source, settings, notifier),
+          extra: source.id == SiteId.v2ex
+              ? _V2exProxy(
+                  settings: settings,
+                  notifier: notifier,
+                  onChanged: () => _reload(SiteId.v2ex),
+                )
+              : null,
+          onOpenBrowser: source.id == SiteId.linuxdo && !Platform.isLinux
+              ? () => _openBrowser(source.id)
+              : null,
+          onClear: _clearFor(source, settings, notifier),
+        ),
+    ];
   }
 
-  VoidCallback? _clearFor(ForumSource source, AppSettings s,
-      SettingsNotifier notifier, WidgetRef ref) {
+  Future<void> _openBrowser(SiteId site) async {
+    final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        fullscreenDialog: true, builder: (_) => const LinuxDoAuthPage()));
+    if (ok == true) _reload(site);
+  }
+
+  VoidCallback? _clearFor(
+      ForumSource source, AppSettings s, SettingsNotifier notifier) {
     return switch (source.id) {
       SiteId.linuxdo => s.linuxdoCookie.isEmpty
           ? null
           : () {
               notifier.patch((v) => v.copyWith(linuxdoCookie: ''));
-              _reload(ref, source.id);
+              _reload(source.id);
             },
       SiteId.v2ex => s.v2exToken.isEmpty
           ? null
           : () {
               notifier.patch((v) => v.copyWith(v2exToken: ''));
-              _reload(ref, source.id);
+              _reload(source.id);
             },
       SiteId.juejin => s.juejinCookie.isEmpty
           ? null
           : () {
               notifier.patch((v) => v.copyWith(juejinCookie: ''));
-              _reload(ref, source.id);
+              _reload(source.id);
             },
     };
   }
 
-  List<CredentialField> _credentialsFor(ForumSource source, AppSettings s,
-      SettingsNotifier notifier, WidgetRef ref) {
+  List<SettingField> _fieldsFor(
+      ForumSource source, AppSettings s, SettingsNotifier notifier) {
     void save(AppSettings Function(AppSettings) f) {
       notifier.patch(f);
-      _reload(ref, source.id);
+      _reload(source.id);
     }
 
     return switch (source.id) {
       SiteId.v2ex => [
-          CredentialField(
+          SettingField(
             label: 'Personal Access Token',
             value: s.v2exToken,
             onSave: (v) => save((x) => x.copyWith(v2exToken: v.trim())),
@@ -143,21 +135,21 @@ class SettingsPage extends ConsumerWidget {
           ),
         ],
       SiteId.juejin => [
-          CredentialField(
+          SettingField(
             label: 'Cookie',
             value: s.juejinCookie,
             onSave: (v) => save((x) => x.copyWith(juejinCookie: v.trim())),
           ),
         ],
       SiteId.linuxdo => [
-          CredentialField(
+          SettingField(
             label: 'Cookie（需包含 cf_clearance）',
             value: s.linuxdoCookie,
             lines: 3,
             advanced: true,
             onSave: (v) => save((x) => x.copyWith(linuxdoCookie: v.trim())),
           ),
-          CredentialField(
+          SettingField(
             label: 'User-Agent（要和取 Cookie 的浏览器一致）',
             value: s.linuxdoUserAgent,
             secret: false,
@@ -169,14 +161,163 @@ class SettingsPage extends ConsumerWidget {
     };
   }
 
-  void _reload(WidgetRef ref, SiteId site) {
+  // ---------- 常规 ----------
+
+  List<Widget> _general(AppSettings settings, SettingsNotifier notifier) {
+    final readLog = ref.watch(readLogProvider);
+    return [
+      Panel(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('主题', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 14),
+          Row(children: [
+            for (final (value, label) in const [
+              ('system', '跟随系统'),
+              ('dark', '深色'),
+              ('light', '浅色'),
+            ])
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: _Choice(
+                  label: label,
+                  selected: settings.themeMode == value,
+                  onTap: () =>
+                      notifier.patch((s) => s.copyWith(themeMode: value)),
+                ),
+              ),
+          ]),
+        ]),
+      ),
+      Panel(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('阅读记录', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            readLog.length == 0
+                ? '还没有读过的帖子。读过的帖子会在列表里变暗。'
+                : '记住了 ${readLog.length} 篇读过的帖子，最多保留 ${ReadLog.limit} 篇。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: kControlHeight,
+            child: OutlinedButton(
+              onPressed: readLog.length == 0
+                  ? null
+                  : () => ref.read(readLogProvider.notifier).clear(),
+              child: const Text('清除阅读记录'),
+            ),
+          ),
+        ]),
+      ),
+    ];
+  }
+
+  void _reload(SiteId site) {
     ref.invalidate(sectionsProvider(site));
     ref.read(detailStackProvider(site).notifier).state = const [];
   }
 }
 
-class CredentialField {
-  const CredentialField({
+/// The two halves of the page, as one segmented control.
+class _Tabs extends StatelessWidget {
+  const _Tabs({required this.current, required this.onSelect});
+
+  final SettingsTab current;
+  final ValueChanged<SettingsTab> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: p.panel,
+          borderRadius: BorderRadius.circular(Radii.block + 4),
+          border: Border.all(color: p.line),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          for (final tab in SettingsTab.values)
+            _Choice(
+              label: tab.label,
+              selected: tab == current,
+              onTap: () => onSelect(tab),
+              idle: Colors.transparent,
+              height: kControlHeight - 6,
+              padding: 26,
+              fontSize: 13.5,
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// V2EX's proxy block: where to send its traffic, and whether the pictures
+/// posts link to go the same way.
+class _V2exProxy extends StatelessWidget {
+  const _V2exProxy({
+    required this.settings,
+    required this.notifier,
+    required this.onChanged,
+  });
+
+  final AppSettings settings;
+  final SettingsNotifier notifier;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasProxy = settings.v2exProxy.trim().isNotEmpty;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const SizedBox(height: 18),
+      const Divider(),
+      const SizedBox(height: 16),
+      Text('代理', style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 4),
+      Text(
+        '能直连就留空。填上以后 V2EX 的接口和网页都从这里走；地址可以是前缀形式 '
+        'https://p.example.com/，也可以用 {url} 或 {encoded_url} 指明目标地址放在哪。',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      const SizedBox(height: 14),
+      _FieldRow(
+        field: SettingField(
+          label: '代理地址',
+          value: settings.v2exProxy,
+          secret: false,
+          onSave: (v) {
+            notifier.patch((x) => x.copyWith(v2exProxy: v.trim()));
+            onChanged();
+          },
+        ),
+      ),
+      const SizedBox(height: 14),
+      _ToggleRow(
+        title: '图片也走代理',
+        // The pictures in a V2EX thread come from whichever host the author
+        // used, so this is a separate decision from proxying the forum.
+        subtitle: hasProxy
+            ? '帖子里的图片和头像也通过代理加载，包括 v2ex.com 以外的图床。'
+            : '先填代理地址，才能让图片也走代理。',
+        value: hasProxy && settings.v2exProxyImages,
+        onChanged: hasProxy
+            ? (v) => notifier.patch((x) => x.copyWith(v2exProxyImages: v))
+            : null,
+      ),
+    ]);
+  }
+}
+
+class SettingField {
+  const SettingField({
     required this.label,
     required this.value,
     required this.onSave,
@@ -204,13 +345,25 @@ class SiteCard extends StatelessWidget {
   const SiteCard({
     super.key,
     required this.source,
-    required this.credentials,
+    required this.fields,
+    required this.shown,
+    required this.onShownChanged,
+    this.extra,
     this.onOpenBrowser,
     this.onClear,
   });
 
   final ForumSource source;
-  final List<CredentialField> credentials;
+  final List<SettingField> fields;
+
+  /// Whether the site is on the rail. A site switched off keeps its settings
+  /// and its credentials; it just stops being one of the tabs.
+  final bool shown;
+  final ValueChanged<bool> onShownChanged;
+
+  /// Anything only this site has, below its fields.
+  final Widget? extra;
+
   final VoidCallback? onOpenBrowser;
   final VoidCallback? onClear;
 
@@ -218,8 +371,8 @@ class SiteCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.palette;
     final access = source.access;
-    final plain = credentials.where((c) => !c.advanced).toList();
-    final advanced = credentials.where((c) => c.advanced).toList();
+    final plain = fields.where((c) => !c.advanced).toList();
+    final advanced = fields.where((c) => c.advanced).toList();
 
     return Panel(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
@@ -256,70 +409,91 @@ class SiteCard extends StatelessWidget {
             tooltip: '打开 ${source.name}',
             onPressed: () => launchUrl(source.homeUrl),
           ),
+          const SizedBox(width: 6),
+          Tooltip(
+            message: shown ? '在左侧显示' : '不在左侧显示',
+            child: Switch(value: shown, onChanged: onShownChanged),
+          ),
         ]),
-        const SizedBox(height: 10),
-        Text(source.accessNote, style: Theme.of(context).textTheme.bodySmall),
-        if (onOpenBrowser != null || onClear != null) ...[
-          const SizedBox(height: 16),
-          SizedBox(
-            height: kControlHeight,
-            child: Row(children: [
-              if (onOpenBrowser != null)
-                FilledButton(
-                  onPressed: onOpenBrowser,
-                  child:
-                      Text(access.level == AccessLevel.blocked ? '开始验证' : '重新验证'),
+        // A site that is off keeps everything it had, so its settings stay
+        // editable; they just recede, the way the site itself has.
+        AnimatedOpacity(
+          duration: Motion.quick,
+          curve: Motion.curve,
+          opacity: shown ? 1 : 0.55,
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const SizedBox(height: 10),
+            Text(source.accessNote,
+                style: Theme.of(context).textTheme.bodySmall),
+            if (onOpenBrowser != null || onClear != null) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                height: kControlHeight,
+                child: Row(children: [
+                  if (onOpenBrowser != null)
+                    FilledButton(
+                      onPressed: onOpenBrowser,
+                      child: Text(access.level == AccessLevel.blocked
+                          ? '开始验证'
+                          : '重新验证'),
+                    ),
+                  if (onOpenBrowser != null && onClear != null)
+                    const SizedBox(width: 8),
+                  if (onClear != null)
+                    OutlinedButton(
+                        onPressed: onClear, child: const Text('清除凭据')),
+                ]),
+              ),
+            ],
+            for (final field in plain) ...[
+              const SizedBox(height: 16),
+              _FieldRow(field: field),
+            ],
+            if (advanced.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Theme(
+                data:
+                    Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  title: Text('手动填写',
+                      style: TextStyle(fontSize: 13, color: p.inkMuted)),
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 6),
+                  expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final field in advanced)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _FieldRow(field: field),
+                      ),
+                  ],
                 ),
-              if (onOpenBrowser != null && onClear != null)
-                const SizedBox(width: 8),
-              if (onClear != null)
-                OutlinedButton(onPressed: onClear, child: const Text('清除凭据')),
-            ]),
-          ),
-        ],
-        for (final field in plain) ...[
-          const SizedBox(height: 16),
-          _CredentialRow(field: field),
-        ],
-        if (advanced.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              title: Text('手动填写',
-                  style: TextStyle(fontSize: 13, color: p.inkMuted)),
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(bottom: 6),
-              expandedCrossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final field in advanced)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _CredentialRow(field: field),
-                  ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+            ?extra,
+          ]),
+        ),
       ]),
     );
   }
 }
 
-class _CredentialRow extends StatefulWidget {
-  const _CredentialRow({required this.field});
-  final CredentialField field;
+/// A labelled setting and the button that stores it.
+class _FieldRow extends StatefulWidget {
+  const _FieldRow({required this.field});
+  final SettingField field;
 
   @override
-  State<_CredentialRow> createState() => _CredentialRowState();
+  State<_FieldRow> createState() => _FieldRowState();
 }
 
-class _CredentialRowState extends State<_CredentialRow> {
+class _FieldRowState extends State<_FieldRow> {
   late final _ctl = TextEditingController(text: widget.field.value);
   late bool _hidden = widget.field.secret;
 
   @override
-  void didUpdateWidget(covariant _CredentialRow old) {
+  void didUpdateWidget(covariant _FieldRow old) {
     super.didUpdateWidget(old);
     if (old.field.value != widget.field.value && _ctl.text != widget.field.value) {
       _ctl.text = widget.field.value;
@@ -392,35 +566,100 @@ class _CredentialRowState extends State<_CredentialRow> {
   }
 }
 
-class _Choice extends StatelessWidget {
-  const _Choice({required this.label, required this.selected, required this.onTap});
+/// A switch with the sentence explaining what it does beside it.
+class _ToggleRow extends StatelessWidget {
+  const _ToggleRow({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool value;
+
+  /// Null disables the switch, which is how [Switch] already says it.
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title,
+              style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
+                  color: context.palette.ink)),
+          const SizedBox(height: 2),
+          Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+        ]),
+      ),
+      const SizedBox(width: 16),
+      Switch(value: value, onChanged: onChanged),
+    ]);
+  }
+}
+
+/// The one pill toggle on this page: the tab strip at the top and the theme
+/// picker under 常规 are the same control at two sizes.
+class _Choice extends StatefulWidget {
+  const _Choice({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.idle,
+    this.height = kControlHeight,
+    this.padding = 18,
+    this.fontSize = 13,
+  });
+
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
+  /// Unselected fill. Defaults to the raised surface; a pill sitting inside a
+  /// track of its own passes transparent so the track shows through.
+  final Color? idle;
+
+  final double height;
+  final double padding;
+  final double fontSize;
+
+  @override
+  State<_Choice> createState() => _ChoiceState();
+}
+
+class _ChoiceState extends State<_Choice> {
+  bool _hover = false;
+
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
+    final selected = widget.selected;
+    final idle = widget.idle ?? p.raised;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
-            height: kControlHeight,
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            decoration: BoxDecoration(
-              color: selected ? p.accent : p.raised,
-              borderRadius: BorderRadius.circular(Radii.block),
-            ),
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: selected ? p.accentInk : p.inkMuted)),
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: Motion.quick,
+          curve: Motion.curve,
+          height: widget.height,
+          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(horizontal: widget.padding),
+          decoration: BoxDecoration(
+            color: selected ? p.accent : (_hover ? p.raised : idle),
+            borderRadius: BorderRadius.circular(Radii.block),
           ),
+          child: Text(widget.label,
+              style: TextStyle(
+                  fontSize: widget.fontSize,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? p.accentInk : p.inkMuted)),
         ),
       ),
     );

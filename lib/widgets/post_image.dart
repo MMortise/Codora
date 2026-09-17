@@ -1,8 +1,7 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 
 import '../app_theme.dart';
+import '../core/forum_source.dart';
 import 'image_viewer.dart';
 import 'site_image.dart';
 
@@ -14,16 +13,14 @@ class PostImage extends StatelessWidget {
     super.key,
     required this.url,
     this.alt,
-    this.headers,
-    this.loader,
+    this.images = SiteImages.plain,
     this.rounded = true,
     this.fullUrl,
   });
 
   final Uri url;
   final String? alt;
-  final Map<String, String>? headers;
-  final Future<Uint8List>? Function(Uri url)? loader;
+  final SiteImages images;
 
   /// Inline emoji keep their own shape; clipping a 20px glyph would cut it.
   /// They are also not worth opening full screen.
@@ -37,8 +34,7 @@ class PostImage extends StatelessWidget {
   Widget build(BuildContext context) {
     final image = SiteImage(
       url: url,
-      headers: headers,
-      loader: loader,
+      images: images,
       fallback: BrokenImage(alt: alt),
     );
     if (!rounded) return image;
@@ -59,8 +55,7 @@ class PostImage extends StatelessWidget {
               context,
               url: fullUrl ?? url,
               alt: alt,
-              headers: headers,
-              loader: loader,
+              images: images,
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(Radii.image),

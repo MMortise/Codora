@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:html/dom.dart' as dom;
@@ -8,6 +6,7 @@ import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
+import '../core/forum_source.dart';
 import '../core/models.dart';
 import 'post_image.dart';
 
@@ -23,8 +22,7 @@ class PostBody extends StatelessWidget {
     required this.format,
     this.baseUrl,
     this.onTopicLink,
-    this.imageHeaders,
-    this.imageLoader,
+    this.images = SiteImages.plain,
     this.fontSize = 15,
   });
 
@@ -34,8 +32,7 @@ class PostBody extends StatelessWidget {
 
   /// Return true if the link was handled in-app.
   final bool Function(Uri uri)? onTopicLink;
-  final Map<String, String>? imageHeaders;
-  final Future<Uint8List>? Function(Uri url)? imageLoader;
+  final SiteImages images;
   final double fontSize;
 
   Uri _resolve(Uri uri) =>
@@ -140,8 +137,7 @@ class _HtmlBody extends StatelessWidget {
           // enclosing lightbox anchor; that is what the viewer should open.
           fullUrl: parent._lightboxTarget(el),
           alt: el.attributes['alt'],
-          headers: parent.imageHeaders,
-          loader: parent.imageLoader,
+          images: parent.images,
           rounded: !el.className.contains('emoji'),
         );
       },
@@ -177,8 +173,7 @@ class _MarkdownBody extends StatelessWidget {
       imageBuilder: (uri, title, alt) => PostImage(
         url: parent._resolve(uri),
         alt: alt,
-        headers: parent.imageHeaders,
-        loader: parent.imageLoader,
+        images: parent.images,
       ),
       styleSheet: MarkdownStyleSheet(
         p: body,

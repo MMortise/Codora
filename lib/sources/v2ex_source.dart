@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:html/parser.dart' as html_parser;
@@ -7,16 +5,27 @@ import 'package:html/parser.dart' as html_parser;
 import '../core/forum_source.dart';
 import '../core/http.dart';
 import '../core/models.dart';
+import '../core/proxy.dart';
 import '../core/settings.dart';
 import '../core/util.dart';
 
 class V2exSource implements ForumSource {
-  V2exSource({this.token = ''})
-      : _dio = buildDio(baseUrl: 'https://www.v2ex.com', headers: {
-          'User-Agent': 'Codora/0.1 (+https://github.com/codora)',
-        });
+  factory V2exSource({String token = '', String proxy = ''}) =>
+      V2exSource._(token, UrlProxy.parse(proxy));
+
+  // The address is parsed once and handed to both the client that uses it and
+  // the field that reports whether there is one.
+  V2exSource._(this.token, UrlProxy? proxy)
+      : _proxy = proxy,
+        _dio = buildDio(
+          baseUrl: 'https://www.v2ex.com',
+          proxy: proxy,
+          headers: {'User-Agent': 'Codora/0.1 (+https://github.com/codora)'},
+        );
 
   final String token;
+
+  final UrlProxy? _proxy;
   final Dio _dio;
 
   @override
@@ -31,15 +40,25 @@ class V2exSource implements ForumSource {
   Uri get homeUrl => Uri.parse('https://www.v2ex.com');
   @override
   String get accessNote => '匿名即可读最热、最新和节点。填入 Personal Access Token 后，'
-      '节点列表改走 v2 接口并支持翻页。';
+      '节点列表改走 v2 接口并支持翻页。直连不通的网络，填个代理地址整站就都从那里走。';
+  // Every picture under the V2EX tab, not only the ones on v2ex.com: posts
+  // link attachments from imgur, sm.ms and whatever else the author used, and
+  // a reader who needs a proxy to reach the forum usually needs it for those
+  // too. Whether they actually take it is the reader's call, applied by
+  // `siteImagesProvider` — it changes nothing about the feed, so it must not
+  // rebuild this source.
   @override
-  Map<String, String>? get imageHeaders => null;
+  late final SiteImages images =
+      _proxy == null ? SiteImages.plain : SiteImages(rewrite: _proxy.apply);
+  // How the site is being reached matters more here than what it is being
+  // read as: without a reachable route there is nothing for a token to do.
   @override
-  Future<Uint8List>? Function(Uri url)? get imageLoader => null;
-  @override
-  SiteAccess get access => token.isEmpty
-      ? const SiteAccess(AccessLevel.open, '匿名浏览')
-      : const SiteAccess(AccessLevel.full, '已带 Token');
+  SiteAccess get access {
+    final via = _proxy == null ? '直连' : '经代理';
+    return token.isEmpty
+        ? SiteAccess(AccessLevel.open, via)
+        : SiteAccess(AccessLevel.full, '$via · Token');
+  }
 
   static const _nodes = <(String, String)>[
     ('programmer', '程序员'),
@@ -93,7 +112,7 @@ class V2exSource implements ForumSource {
   /// endpoint, so this reads the same page the site serves to a browser.
   /// Roughly 55 topics, one page only.
   Future<PageResult<TopicSummary>> _fetchAllTab() async {
-    final Response<String> res;
+    Response<String> res;
     try {
       res = await _dio.get<String>(
         '/',
@@ -107,7 +126,7 @@ class V2exSource implements ForumSource {
         ),
       );
     } on DioException catch (e) {
-      throw Exception('V2EX 网络错误：${e.message ?? e.type.name}');
+      res = e.response as Response<String>? ?? _unreachable(e);
     }
     final code = res.statusCode ?? 0;
     if (code == 403 || code == 429) {
@@ -155,6 +174,37 @@ class V2exSource implements ForumSource {
       throw Exception('没能从 V2EX 首页读出主题，页面结构可能变了');
     }
     return PageResult(items: items);
+  }
+
+  /// Turns a request that never got an answer into something to act on.
+  ///
+  /// V2EX does not answer from every network, and the symptom is a connection
+  /// that simply never completes. Reporting that as "网络错误" leaves the
+  /// reader with nowhere to go, so it is named for what it usually is and
+  /// points at the setting that fixes it. Once a proxy is set the same failure
+  /// means something else — the proxy is the part that is down — so it is
+  /// reported as that instead of blaming V2EX.
+  Never _unreachable(DioException e) => throw unreachableError(e);
+
+  /// Built separately from being thrown so both shapes of it can be checked
+  /// without a network.
+  @visibleForTesting
+  AuthRequiredException unreachableError(DioException e) {
+    if (_proxy == null) {
+      return AuthRequiredException(
+        id,
+        '连不上 V2EX',
+        AuthRecovery.settings,
+        hint: '有的网络能直连 V2EX，有的不能。连不上的话，'
+            '到设置里给它填一个代理地址，整站就都从那里走。',
+      );
+    }
+    return AuthRequiredException(
+      id,
+      '代理没能连上 V2EX',
+      AuthRecovery.settings,
+      hint: '代理没有响应（${e.message ?? e.type.name}）。到设置里确认代理地址还能用。',
+    );
   }
 
   /// The page writes times as `2026-09-17 09:48:32 +08:00`, which needs the
@@ -208,7 +258,7 @@ class V2exSource implements ForumSource {
 
   /// Reads the replies off the topic page, which is always up to date.
   Future<List<Reply>> _scrapeReplies(String topicId) async {
-    final Response<String> res;
+    Response<String> res;
     try {
       res = await _dio.get<String>(
         '/t/$topicId',
@@ -221,7 +271,7 @@ class V2exSource implements ForumSource {
         ),
       );
     } on DioException catch (e) {
-      throw Exception('V2EX 网络错误：${e.message ?? e.type.name}');
+      res = e.response as Response<String>? ?? _unreachable(e);
     }
     if ((res.statusCode ?? 0) >= 400) return const [];
 
@@ -410,11 +460,18 @@ class V2exSource implements ForumSource {
 
   Future<dynamic> _get(String path,
       {Map<String, String>? query, bool bearer = false}) async {
-    final res = await _dio.get(path,
-        queryParameters: query,
-        options: bearer
-            ? Options(headers: {'Authorization': 'Bearer $token'})
-            : null);
+    Response<dynamic> res;
+    try {
+      res = await _dio.get<dynamic>(path,
+          queryParameters: query,
+          options: bearer
+              ? Options(headers: {'Authorization': 'Bearer $token'})
+              : null);
+    } on DioException catch (e) {
+      // A 5xx still carries a response and is reported by status below; only
+      // a request that never arrived is a reachability problem.
+      res = e.response ?? _unreachable(e);
+    }
     final code = res.statusCode ?? 0;
     if (code == 401) {
       throw AuthRequiredException(

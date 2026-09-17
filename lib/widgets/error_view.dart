@@ -34,8 +34,15 @@ class ErrorView extends ConsumerWidget {
                 color: p.raised,
                 borderRadius: BorderRadius.circular(Radii.block),
               ),
-              child: Icon(auth != null ? Icons.key_rounded : Icons.cloud_off_rounded,
-                  size: 19, color: auth != null ? p.cream : p.inkMuted),
+              // A site that wrote its own hint is not telling a credentials
+              // story — an unreachable forum gets the same cloud as any other
+              // failure to connect, not a key.
+              child: Icon(
+                  auth != null && auth.hint == null
+                      ? Icons.key_rounded
+                      : Icons.cloud_off_rounded,
+                  size: 19,
+                  color: auth != null ? p.cream : p.inkMuted),
             ),
             const SizedBox(height: 14),
             Text(message,
@@ -44,10 +51,11 @@ class ErrorView extends ConsumerWidget {
             if (auth != null) ...[
               const SizedBox(height: 6),
               Text(
-                switch (auth.recovery) {
-                  AuthRecovery.browser => '在内置浏览器里过一次验证，凭据会自动保存。',
-                  AuthRecovery.settings => '到设置里更新这个站点的凭据。',
-                },
+                auth.hint ??
+                    switch (auth.recovery) {
+                      AuthRecovery.browser => '在内置浏览器里过一次验证，凭据会自动保存。',
+                      AuthRecovery.settings => '到设置里更新这个站点的凭据。',
+                    },
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -84,6 +92,8 @@ class ErrorView extends ConsumerWidget {
           onRetry?.call();
         }
       case AuthRecovery.settings:
+        // Land on the forums half, which is where every per-site fix lives.
+        ref.read(settingsTabProvider.notifier).state = SettingsTab.forums;
         ref.read(navProvider.notifier).state = NavTarget.settings;
     }
   }

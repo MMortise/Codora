@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import '../core/forum_source.dart';
 import '../core/http.dart';
 import '../core/models.dart';
@@ -47,11 +45,6 @@ class LinuxDoSource implements ForumSource {
         : const SiteAccess(AccessLevel.limited, '已验证，未登录');
   }
 
-  // Images are behind the same protection as the API, so they are fetched
-  // through the WebView too rather than with headers a plain request sends.
-  @override
-  Map<String, String>? get imageHeaders => null;
-
   /// Whether an image has to be fetched through the browser.
   ///
   /// Only the forum's own domain sits behind the challenge. Uploads and emoji
@@ -61,13 +54,18 @@ class LinuxDoSource implements ForumSource {
   /// requests, which is how they ended up failing before.
   bool needsBrowser(Uri url) => url.host == _origin.host;
 
+  // Images on the forum's own domain are behind the same protection as the
+  // API, so they are fetched through the WebView rather than with headers a
+  // plain request could send.
   @override
-  Future<Uint8List>? Function(Uri url)? get imageLoader {
-    if (cookie.isEmpty) return null;
-    return (url) => needsBrowser(url)
-        ? WebViewFetcher.instance.getBytes(_origin, url, userAgent: userAgent)
-        : null;
-  }
+  late final SiteImages images = cookie.isEmpty
+      ? SiteImages.plain
+      : SiteImages(
+          loader: (url) => needsBrowser(url)
+              ? WebViewFetcher.instance
+                  .getBytes(_origin, url, userAgent: userAgent)
+              : null,
+        );
 
   @override
   Future<List<Section>> sections() async {

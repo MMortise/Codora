@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/forum_source.dart';
@@ -22,7 +20,42 @@ extension NavTargetX on NavTarget {
       };
 }
 
+extension SiteIdNav on SiteId {
+  /// Reads [NavTargetX.site] backwards rather than restating it, so the two
+  /// directions cannot disagree about a site added later.
+  NavTarget get target => NavTarget.values.firstWhere((t) => t.site == this);
+}
+
+/// The two halves of the settings page: the forums, and everything that is
+/// about the app rather than a site.
+enum SettingsTab {
+  forums('论坛'),
+  general('常规');
+
+  const SettingsTab(this.label);
+  final String label;
+}
+
+/// Which half is open. Shared rather than local to the page so that sending
+/// someone to settings can put them on the tab holding the fix.
+final settingsTabProvider =
+    StateProvider<SettingsTab>((_) => SettingsTab.forums);
+
+/// Where the reader has clicked. Read through [currentNavProvider], which is
+/// the one that accounts for sites switched off.
 final navProvider = StateProvider<NavTarget>((_) => NavTarget.v2ex);
+
+/// The tab actually on screen.
+///
+/// A site the reader has switched off cannot be the current one, so the shell
+/// falls back to the first site still showing — and to settings when none is,
+/// which is also the only way back from there.
+final currentNavProvider = Provider<NavTarget>((ref) {
+  final nav = ref.watch(navProvider);
+  final visible = ref.watch(visibleSiteIdsProvider);
+  if (nav.site == null || visible.contains(nav.site)) return nav;
+  return visible.isEmpty ? NavTarget.settings : visible.first.target;
+});
 
 // ---------- settings ----------
 
@@ -74,30 +107,59 @@ final readLogProvider =
 
 // ---------- sources ----------
 
+/// Each site watches only the settings it is built from. Watching the whole
+/// object would rebuild every source — and so reload every feed — when an
+/// unrelated preference like the theme changes.
 final sourceProvider = Provider.family<ForumSource, SiteId>((ref, site) {
-  final s = ref.watch(settingsProvider);
+  T pick<T>(T Function(AppSettings) f) => ref.watch(settingsProvider.select(f));
   return switch (site) {
-    SiteId.v2ex => V2exSource(token: s.v2exToken),
-    SiteId.linuxdo =>
-      LinuxDoSource(cookie: s.linuxdoCookie, userAgent: s.linuxdoUserAgent),
-    SiteId.juejin => JuejinSource(cookie: s.juejinCookie),
+    SiteId.v2ex => V2exSource(
+        token: pick((s) => s.v2exToken),
+        proxy: pick((s) => s.v2exProxy),
+      ),
+    SiteId.linuxdo => LinuxDoSource(
+        cookie: pick((s) => s.linuxdoCookie),
+        userAgent: pick((s) => s.linuxdoUserAgent),
+      ),
+    SiteId.juejin => JuejinSource(cookie: pick((s) => s.juejinCookie)),
   };
 });
 
-/// Extra headers needed to load a site's images, straight from the source.
-final siteImageHeadersProvider =
-    Provider.family<Map<String, String>?, SiteId>(
-        (ref, site) => ref.watch(sourceProvider(site)).imageHeaders);
+/// How a site's pictures are reached. Held by the provider so the descriptor
+/// stays the same object between rebuilds — [SiteImage] restarts a load when
+/// it changes.
+///
+/// The reader's choice about proxying pictures is applied here rather than
+/// inside the source: it says nothing about the feed, so baking it into the
+/// source would refetch one every time the switch is flipped.
+final siteImagesProvider = Provider.family<SiteImages, SiteId>((ref, site) {
+  final images = ref.watch(sourceProvider(site)).images;
+  final proxied =
+      ref.watch(settingsProvider.select((s) => s.proxiesImages(site)));
+  return proxied ? images : images.unproxied;
+});
 
-/// Image loader for a site, when a plain network request will not do.
-final siteImageLoaderProvider =
-    Provider.family<Future<Uint8List>? Function(Uri)?, SiteId>(
-        (ref, site) => ref.watch(sourceProvider(site)).imageLoader);
-
-/// Every site in display order. The rail, the settings page and anything else
-/// that enumerates sites reads this instead of hard-coding three entries.
+/// Every site in display order, including the ones switched off — the
+/// settings page lists all of them.
 final allSourcesProvider = Provider<List<ForumSource>>(
     (ref) => [for (final s in SiteId.values) ref.watch(sourceProvider(s))]);
+
+/// Which sites the rail shows, from the switches alone. Kept separate from
+/// [visibleSourcesProvider] so that editing a credential — which rebuilds a
+/// source — does not churn the shell's layout or the current tab.
+final visibleSiteIdsProvider = Provider<List<SiteId>>((ref) {
+  final hidden = ref.watch(settingsProvider.select((s) => s.hiddenSites));
+  return [
+    for (final site in SiteId.values)
+      if (!hidden.contains(site)) site,
+  ];
+});
+
+/// The sites the rail shows, with the state the rail draws them from.
+final visibleSourcesProvider = Provider<List<ForumSource>>((ref) => [
+      for (final site in ref.watch(visibleSiteIdsProvider))
+        ref.watch(sourceProvider(site)),
+    ]);
 
 final sectionsProvider =
     FutureProvider.family<List<Section>, SiteId>((ref, site) {

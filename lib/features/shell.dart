@@ -30,18 +30,23 @@ class AppShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final nav = ref.watch(navProvider);
+    final nav = ref.watch(currentNavProvider);
+    final sites = ref.watch(visibleSiteIdsProvider);
+
+    // Only the sites on the rail are built. A stack holding all of them would
+    // keep a switched-off site fetching its boards in the background, which is
+    // most of the reason to switch one off. Settings is always last.
     return Scaffold(
       body: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const _Rail(),
         Expanded(
           child: IndexedStack(
-            index: nav.index,
-            children: const [
-              SitePage(site: SiteId.v2ex),
-              SitePage(site: SiteId.linuxdo),
-              SitePage(site: SiteId.juejin),
-              SettingsPage(),
+            index: nav == NavTarget.settings
+                ? sites.length
+                : sites.indexOf(nav.site!),
+            children: [
+              for (final site in sites) _pageFor(site),
+              const SettingsPage(),
             ],
           ),
         ),
@@ -50,16 +55,35 @@ class AppShell extends ConsumerWidget {
   }
 }
 
+/// The one page per site, as a canonical `const`.
+///
+/// Every page in the stack stays mounted, so handing `IndexedStack` the
+/// identical widget on an unrelated rebuild — a rail click, say — lets Flutter
+/// skip all of their subtrees instead of rebuilding the lot. The key is what
+/// stops a site leaving the rail from handing its scroll position to whichever
+/// one slides into its place.
+Widget _pageFor(SiteId site) => switch (site) {
+      SiteId.v2ex =>
+        const SitePage(key: ValueKey(SiteId.v2ex), site: SiteId.v2ex),
+      SiteId.linuxdo =>
+        const SitePage(key: ValueKey(SiteId.linuxdo), site: SiteId.linuxdo),
+      SiteId.juejin =>
+        const SitePage(key: ValueKey(SiteId.juejin), site: SiteId.juejin),
+    };
+
 /// Narrow left rail. Each site is a square block with its own glyph, so the
 /// current site is readable at a glance without a label column.
+///
+/// Only the sites switched on in settings appear here; settings itself always
+/// does, so a rail emptied of forums is still a way back.
 class _Rail extends ConsumerWidget {
   const _Rail();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final nav = ref.watch(navProvider);
+    final nav = ref.watch(currentNavProvider);
     final p = context.palette;
-    final sources = ref.watch(allSourcesProvider);
+    final sources = ref.watch(visibleSourcesProvider);
 
     return Container(
       width: 64,
@@ -78,8 +102,8 @@ class _Rail extends ConsumerWidget {
             label: '${source.name} · ${source.access.label}',
             selected: nav.site == source.id,
             status: _statusColor(p, source.access.level),
-            onTap: () => ref.read(navProvider.notifier).state =
-                NavTarget.values.firstWhere((t) => t.site == source.id),
+            onTap: () =>
+                ref.read(navProvider.notifier).state = source.id.target,
           ),
         const Spacer(),
         _RailBlock(

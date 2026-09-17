@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:dio/dio.dart';
 
 import '../core/forum_source.dart';
@@ -32,9 +30,8 @@ class JuejinSource implements ForumSource {
   @override
   String get accessNote => '匿名即可读推荐、最新、热榜、分类和评论。填入 Cookie 后推荐会按你的账号来。';
   @override
-  Map<String, String>? get imageHeaders => null;
-  @override
-  Future<Uint8List>? Function(Uri url)? get imageLoader => null;
+  SiteImages get images => SiteImages.plain;
+
   @override
   SiteAccess get access => cookie.isEmpty
       ? const SiteAccess(AccessLevel.open, '匿名浏览')

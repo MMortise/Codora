@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app_theme.dart';
+import '../core/forum_source.dart';
 import '../core/models.dart';
 import '../core/util.dart';
 import '../widgets/avatar.dart';
@@ -73,8 +74,7 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
     final feed = ref.watch(feedProvider(_key));
     final stack = ref.watch(detailStackProvider(widget.site));
     final selectedId = stack.isEmpty ? null : stack.first.id;
-    final imageHeaders = ref.watch(siteImageHeadersProvider(widget.site));
-    final imageLoader = ref.watch(siteImageLoaderProvider(widget.site));
+    final images = ref.watch(siteImagesProvider(widget.site));
     final readLog = ref.watch(readLogProvider);
 
     return CallbackShortcuts(
@@ -122,8 +122,7 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
                     topic: t,
                     selected: t.id == selectedId,
                     read: readLog.contains(widget.site, t.id),
-                    imageHeaders: imageHeaders,
-                    imageLoader: imageLoader,
+                    images: images,
                     onTap: () {
                       _focus.requestFocus();
                       widget.onOpen(t);
@@ -176,8 +175,7 @@ class TopicCard extends StatefulWidget {
     required this.selected,
     required this.onTap,
     this.read = false,
-    this.imageHeaders,
-    this.imageLoader,
+    this.images = SiteImages.plain,
   });
   final TopicSummary topic;
   final bool selected;
@@ -185,8 +183,7 @@ class TopicCard extends StatefulWidget {
   /// Already opened. Shown by dimming, the way a read message list does it.
   final bool read;
   final VoidCallback onTap;
-  final Map<String, String>? imageHeaders;
-  final Future<Uint8List>? Function(Uri url)? imageLoader;
+  final SiteImages images;
 
   @override
   State<TopicCard> createState() => _TopicCardState();
@@ -279,8 +276,7 @@ class _TopicCardState extends State<TopicCard> {
                         url: t.author!.avatarUrl,
                         name: t.author!.name,
                         size: 18,
-                        headers: widget.imageHeaders,
-                        loader: widget.imageLoader),
+                        images: widget.images),
                     const SizedBox(width: 7),
                     Flexible(
                       child: Text(t.author!.name,

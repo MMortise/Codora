@@ -1,8 +1,7 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 
 import '../app_theme.dart';
+import '../core/forum_source.dart';
 import 'site_image.dart';
 
 /// Square-ish avatar with an initial fallback. Same shape family as the rail
@@ -13,15 +12,13 @@ class UserAvatar extends StatelessWidget {
     this.url,
     required this.name,
     this.size = 32,
-    this.headers,
-    this.loader,
+    this.images = SiteImages.plain,
   });
 
   final String? url;
   final String name;
   final double size;
-  final Map<String, String>? headers;
-  final Future<Uint8List>? Function(Uri url)? loader;
+  final SiteImages images;
 
   @override
   Widget build(BuildContext context) {
@@ -50,8 +47,7 @@ class UserAvatar extends StatelessWidget {
               width: size,
               height: size,
               fit: BoxFit.cover,
-              headers: headers,
-              loader: loader,
+              images: images,
               fallback: fallback,
             ),
     );
