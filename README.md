@@ -1,4 +1,4 @@
-# Codora
+<img src="assets/brand/codora_wordmark.png" alt="Codora" width="300">
 
 一个桌面端论坛聚合阅读器，把 V2EX、linux.do、掘金放进同一个界面里读。macOS 为主，同时保留 Windows 和 Linux 平台目录。
 
@@ -90,6 +90,27 @@ flutter test --dart-define=LIVE=true test/sources_live_test.dart
 
 [test/fixtures](test/fixtures) 里存了三个站各自的真实正文，用来离线验证渲染器吃得下真实内容，
 换新样本的命令写在那个目录的说明里。
+
+## 品牌
+
+<img src="assets/brand/codora_icon.png" alt="Codora 图标" width="96">
+
+标是三段弧拼成的一个 C：三个来源，一个阅读器。段间缝隙刻意做得比 C 的主开口小得多，
+否则三个豁口一样大，整个标就读成加载转圈而不是字母。圆头笔帽每端还会向外多吃掉一点角度，
+缝隙参数要先扣掉它才是眼睛看到的宽度，这两条约束在生成器里是断言。
+
+三段的紫色阶直接取自 [app_theme.dart](lib/app_theme.dart)，对白底的对比度分别是 8.4:1、6.3:1、4.5:1。
+
+矢量源和各平台图标都从一份脚本生成：
+
+```bash
+python3 tool/brand.py
+```
+
+改 logo 只改 [tool/brand.py](tool/brand.py)，重跑会一并刷新 macOS 的 `AppIcon.appiconset`、
+Windows 的 `app_icon.ico` 和 [assets/brand](assets/brand) 下的 SVG。16px 与 32px 走一套单独的
+光学补偿参数 —— 图形更大、笔画更粗、缝隙更张，否则菜单栏尺寸下会糊成一团。
+依赖 `cairosvg` 和 `pillow`。
 
 ## 说明
 
