@@ -59,8 +59,8 @@ class _ReplyBoxState extends State<ReplyBox> {
     try {
       await widget.onSend(text);
       if (!mounted) return;
-      // Clearing notifies the listener, which rebuilds; only the flag is left
-      // to set here.
+      // Emptied only now, once the forum has it. Clearing notifies the
+      // listener, which rebuilds; only the flag is left to set here.
       _text.clear();
       setState(() => _sending = false);
     } catch (e) {
@@ -111,7 +111,12 @@ class _ReplyBoxState extends State<ReplyBox> {
               },
               child: TextField(
                 controller: _text,
-                enabled: !_sending,
+                // Read-only rather than disabled while it is on its way.
+                // What was written has to stay both there and legible until
+                // the forum has taken it: Material paints a disabled field at
+                // 38% opacity, which on this canvas reads as the box having
+                // emptied itself the moment 发送 was pressed.
+                readOnly: _sending,
                 minLines: 1,
                 maxLines: 6,
                 style: const TextStyle(fontSize: 13, height: 1.45),

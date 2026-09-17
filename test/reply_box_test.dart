@@ -81,6 +81,31 @@ void main() {
           isEmpty, reason: 'it went, so it should not still be sitting there');
     });
 
+    testWidgets('what was written stays, and stays legible, while it goes',
+        (tester) async {
+      // It was never actually cleared, but a disabled field is painted at 38%
+      // opacity, and on this canvas that reads as the box having emptied
+      // itself the moment 发送 was pressed.
+      await pumpBox(tester, (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
+      await tester.enterText(find.byType(TextField), '说得好');
+      await tester.pump();
+      await tester.tap(sendButton());
+      await tester.pump();
+
+      final painted = tester.widget<EditableText>(find.byType(EditableText));
+      expect(painted.controller.text, '说得好');
+      expect(painted.style.color?.a, 1.0,
+          reason: 'faded out is how it looked emptied');
+      expect(tester.widget<TextField>(find.byType(TextField)).readOnly, isTrue,
+          reason: 'read-only, so it cannot change under the send');
+
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text,
+          isEmpty, reason: 'and emptied only now, once the forum has it');
+    });
+
     testWidgets('a refusal is shown, and what was written stays put',
         (tester) async {
       await pumpBox(tester, (_) async => throw Exception('正文似乎不清晰'));
