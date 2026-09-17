@@ -142,6 +142,22 @@ class Motion {
 /// fields sitting on one row line up exactly.
 const kControlHeight = 40.0;
 
+/// What the pointer says over a control.
+///
+/// Material's own default for buttons and switches is
+/// `WidgetStateMouseCursor.adaptiveClickable`, which leaves the plain arrow on
+/// desktop and only shows a hand on the web. This app has already chosen the
+/// hand everywhere else it can be clicked — links, pictures, the rail, the
+/// section blocks, the tabs — so a button that kept the arrow would be the one
+/// control in the app that looked inert. Buttons follow the app, not the
+/// platform. Refusing the pointer outright is also easier to catch than a
+/// dimmed colour, which is the only other thing a disabled control does.
+final clickable = WidgetStateProperty.resolveWith<MouseCursor?>(
+  (states) => states.contains(WidgetState.disabled)
+      ? SystemMouseCursors.forbidden
+      : SystemMouseCursors.click,
+);
+
 /// Corner radii carry hierarchy: panels are the softest, cards sit inside
 /// them, pills are fully round. Nothing else gets a radius.
 class Radii {
@@ -249,7 +265,7 @@ ThemeData buildTheme(Brightness brightness) {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         // The global compact density would shave 8px off minimumSize.
         visualDensity: VisualDensity.standard,
-      ),
+      ).copyWith(mouseCursor: clickable),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
@@ -267,23 +283,35 @@ ThemeData buildTheme(Brightness brightness) {
         maximumSize: const Size.fromHeight(kControlHeight),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         visualDensity: VisualDensity.standard,
-      ),
+      ).copyWith(mouseCursor: clickable),
     ),
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
         foregroundColor: p.inkMuted,
         textStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-      ),
+      ).copyWith(mouseCursor: clickable),
+    ),
+    // The rows of the board dropdown. They are buttons too, and the styling
+    // they carry at the call site says nothing about the pointer.
+    menuButtonTheme: MenuButtonThemeData(
+      style: ButtonStyle(mouseCursor: clickable),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: p.canvas,
       isDense: true,
-      // A single-line field lands on kControlHeight, the same height as the
-      // buttons it sits beside; the floor keeps it there even when a larger
-      // text scale would otherwise make it shorter than them, and a
-      // multi-line field grows from the same top and bottom inset.
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      // The outline is drawn around the *content*, so the padding is what
+      // carries the shared height. `constraints` cannot do it: a minHeight
+      // stretches the decorator's own box and leaves the painted outline
+      // short inside it, top-aligned, which is how the fields spent a while
+      // sitting 6px under the buttons while every widget-level measurement
+      // said 40. At the 13px these fields are drawn in, 14 puts one line of
+      // text on exactly kControlHeight; `control_height_test` measures the
+      // outline itself so it cannot drift again. A multi-line field grows
+      // from the same two insets.
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      // Kept as a floor on the decorator, so the row's spacing survives a
+      // field whose content somehow measures shorter than the buttons.
       constraints: const BoxConstraints(minHeight: kControlHeight),
       labelStyle: TextStyle(color: p.inkMuted, fontSize: 13),
       border: OutlineInputBorder(
@@ -308,6 +336,7 @@ ThemeData buildTheme(Brightness brightness) {
     // On is the same accent fill every other selected control uses.
     switchTheme: SwitchThemeData(
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      mouseCursor: clickable,
       trackColor: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.disabled)) {
           return p.raised.withValues(alpha: 0.5);
