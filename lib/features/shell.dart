@@ -1,0 +1,677 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:window_manager/window_manager.dart';
+
+import '../app_theme.dart';
+import '../core/models.dart';
+import '../widgets/chrome.dart';
+import '../widgets/site_icon.dart';
+import '../widgets/swap.dart';
+import 'providers.dart';
+import 'settings_page.dart';
+import 'topic_detail.dart';
+import 'topic_list.dart';
+
+/// Breathing room between the rail and everything in the content column.
+const kGutter = 18.0;
+
+/// Height of a board row in the dropdown. A line of text measures 16, so this
+/// is that plus 10 of air above and below.
+const kMenuRowHeight = 36.0;
+
+/// How many boards the dropdown shows before it starts scrolling. Sites list
+/// a dozen or more, and a menu that runs the height of the window is harder
+/// to aim at than one that scrolls.
+const kMenuVisibleRows = 10;
+
+class AppShell extends ConsumerWidget {
+  const AppShell({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final nav = ref.watch(navProvider);
+    return Scaffold(
+      body: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const _Rail(),
+        Expanded(
+          child: IndexedStack(
+            index: nav.index,
+            children: const [
+              SitePage(site: SiteId.v2ex),
+              SitePage(site: SiteId.linuxdo),
+              SitePage(site: SiteId.juejin),
+              SettingsPage(),
+            ],
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Narrow left rail. Each site is a square block with its own glyph, so the
+/// current site is readable at a glance without a label column.
+class _Rail extends ConsumerWidget {
+  const _Rail();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final nav = ref.watch(navProvider);
+    final p = context.palette;
+    final sources = ref.watch(allSourcesProvider);
+
+    return Container(
+      width: 64,
+      color: p.canvas,
+      child: Column(children: [
+        // Clears the macOS traffic lights, which sit over the rail.
+        const SizedBox(height: 52),
+        for (final source in sources)
+          _RailBlock(
+            icon: SiteIcon(
+              asset: source.iconAsset,
+              glyph: source.glyph,
+              size: 24,
+              dimmed: nav.site != source.id,
+            ),
+            label: '${source.name} · ${source.access.label}',
+            selected: nav.site == source.id,
+            status: _statusColor(p, source.access.level),
+            onTap: () => ref.read(navProvider.notifier).state =
+                NavTarget.values.firstWhere((t) => t.site == source.id),
+          ),
+        const Spacer(),
+        _RailBlock(
+          icon: const Icon(Icons.tune_rounded, size: 18),
+          label: '设置',
+          selected: nav == NavTarget.settings,
+          onTap: () => ref.read(navProvider.notifier).state = NavTarget.settings,
+        ),
+        const SizedBox(height: 14),
+      ]),
+    );
+  }
+
+  /// Only a site that needs attention gets a dot; "open" sites stay quiet.
+  Color? _statusColor(Palette p, AccessLevel level) => switch (level) {
+        AccessLevel.open => null,
+        AccessLevel.full => p.mint,
+        AccessLevel.limited => p.cream,
+        AccessLevel.blocked => p.rose,
+      };
+}
+
+class _RailBlock extends StatefulWidget {
+  const _RailBlock({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.status,
+  });
+
+  final Widget icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final Color? status;
+
+  @override
+  State<_RailBlock> createState() => _RailBlockState();
+}
+
+class _RailBlockState extends State<_RailBlock> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final selected = widget.selected;
+    return Tooltip(
+      message: widget.label,
+      preferBelow: false,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: Motion.quick,
+            curve: Motion.curve,
+            width: 40,
+            height: 40,
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(
+              // The logos bring their own colours, so the current site is
+              // marked by the surface and ring, never by the mark itself.
+              color: selected
+                  ? p.accentSoft
+                  : (_hover ? p.raised : p.panel),
+              borderRadius: BorderRadius.circular(Radii.block),
+              border: Border.all(
+                color: selected ? p.accent : p.line,
+                width: selected ? 1.6 : 1,
+              ),
+            ),
+            child: Stack(children: [
+              Center(
+                child: IconTheme(
+                  data: IconThemeData(
+                      size: 18, color: selected ? p.ink : p.inkMuted),
+                  child: widget.icon,
+                ),
+              ),
+              if (widget.status != null)
+                Positioned(
+                  right: 4,
+                  top: 4,
+                  child: Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: widget.status,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: p.panel, width: 1),
+                    ),
+                  ),
+                ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SitePage extends ConsumerWidget {
+  const SitePage({super.key, required this.site});
+  final SiteId site;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sectionsAsync = ref.watch(sectionsProvider(site));
+    final selected = ref.watch(selectedSectionProvider(site));
+    final sections = sectionsAsync.valueOrNull ?? const <Section>[];
+    final sectionId = selected ?? (sections.isNotEmpty ? sections.first.id : null);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Padding(
+        padding: const EdgeInsets.only(left: kGutter),
+        child: _TopBar(site: site, sectionId: sectionId),
+      ),
+      _SectionBlocks(
+        site: site,
+        sections: sections,
+        selectedId: sectionId,
+        loading: sectionsAsync.isLoading,
+      ),
+      Expanded(
+        child: LayoutBuilder(builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 940;
+          if (sectionId == null) {
+            return Center(
+              child: sectionsAsync.isLoading
+                  ? const CircularProgressIndicator(strokeWidth: 2)
+                  : Text('这个站点还没有可用的板块',
+                      style: Theme.of(context).textTheme.bodySmall),
+            );
+          }
+          final list = Swap(
+            swapKey: 'list-$site-$sectionId',
+            child: TopicListPane(
+              key: ValueKey('list-$site-$sectionId'),
+              site: site,
+              sectionId: sectionId,
+              onOpen: (t) => _open(context, ref, t, pushRoute: !wide),
+            ),
+          );
+          if (!wide) {
+            return Padding(
+                padding: const EdgeInsets.fromLTRB(kGutter, 0, kGutter, kGutter),
+                child: list);
+          }
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 0, kGutter, kGutter),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              SizedBox(width: 392, child: list),
+              const SizedBox(width: 14),
+              Expanded(child: Panel(child: DetailPane(site: site))),
+            ]),
+          );
+        }),
+      ),
+    ]);
+  }
+
+  void _open(BuildContext context, WidgetRef ref, TopicSummary t,
+      {required bool pushRoute}) {
+    final target = TopicRef(site, t.id);
+    ref.read(readLogProvider.notifier).markRead(site, t.id);
+    ref.read(detailStackProvider(site).notifier).state = [target];
+    if (pushRoute) {
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => TopicDetailPage(topic: target, title: t.title)));
+    }
+  }
+}
+
+class _TopBar extends ConsumerWidget {
+  const _TopBar({required this.site, required this.sectionId});
+  final SiteId site;
+  final String? sectionId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.palette;
+    final source = ref.watch(sourceProvider(site));
+
+    return DragToMoveArea(
+      child: SizedBox(
+        height: 62,
+        child: Row(children: [
+          Text('codora',
+              style: TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.8,
+                  height: 1,
+                  color: p.ink)),
+          Container(
+            width: 5,
+            height: 5,
+            margin: const EdgeInsets.only(left: 3, bottom: 3),
+            alignment: Alignment.bottomCenter,
+            decoration: BoxDecoration(color: p.accent, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 20),
+          Container(width: 1, height: 18, color: p.line),
+          const SizedBox(width: 20),
+          Swap(
+            swapKey: source.name,
+            drift: 0,
+            child: Text(source.name,
+                style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    color: p.inkMuted)),
+          ),
+          const Spacer(),
+          QuietIconButton(
+            icon: Icons.refresh_rounded,
+            tooltip: '刷新列表',
+            onPressed: sectionId == null
+                ? null
+                : () => ref
+                    .read(feedProvider(FeedKey(site, sectionId!)).notifier)
+                    .refresh(),
+          ),
+          QuietIconButton(
+            icon: Icons.north_east_rounded,
+            tooltip: '在浏览器中打开 ${source.name}',
+            onPressed: () => launchUrl(source.homeUrl),
+          ),
+          const SizedBox(width: 12),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Two-line section blocks: Chinese name over the board's own latin slug.
+/// Boards beyond the first few live in a dropdown so the row never wraps.
+class _SectionBlocks extends ConsumerWidget {
+  const _SectionBlocks({
+    required this.site,
+    required this.sections,
+    required this.selectedId,
+    required this.loading,
+  });
+  final SiteId site;
+  final List<Section> sections;
+  final String? selectedId;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.palette;
+    final primary = sections.where((s) => s.group == null).toList();
+    final groups = <String, List<Section>>{};
+    for (final s in sections) {
+      if (s.group != null) groups.putIfAbsent(s.group!, () => []).add(s);
+    }
+    void select(String id) =>
+        ref.read(selectedSectionProvider(site).notifier).state = id;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(kGutter, 0, kGutter, 14),
+      child: SizedBox(
+        height: 58,
+        child: Row(children: [
+          Expanded(
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context)
+                  .copyWith(scrollbars: false, overscroll: false),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  for (final s in primary)
+                    _SectionBlock(
+                      section: s,
+                      selected: s.id == selectedId,
+                      onTap: () => select(s.id),
+                    ),
+                  for (final e in groups.entries)
+                    SectionGroupMenu(
+                      label: e.key,
+                      sections: e.value,
+                      selectedId: selectedId,
+                      onSelect: select,
+                    ),
+                  if (loading)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 10),
+                      child: SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: p.inkFaint),
+                      ),
+                    ),
+                ]),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _SectionBlock extends StatefulWidget {
+  const _SectionBlock({
+    required this.section,
+    required this.selected,
+    required this.onTap,
+  });
+  final Section section;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_SectionBlock> createState() => _SectionBlockState();
+}
+
+class _SectionBlockState extends State<_SectionBlock> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final selected = widget.selected;
+    final title = selected ? p.accentInk : p.ink;
+    final sub = selected ? p.accentInk.withValues(alpha: 0.62) : p.inkFaint;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: Motion.quick,
+          margin: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+          constraints: const BoxConstraints(minWidth: 68),
+          decoration: BoxDecoration(
+            color: selected ? p.accent : (_hover ? p.raised : p.panel),
+            borderRadius: BorderRadius.circular(Radii.block),
+            border: Border.all(color: selected ? p.accent : p.line),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.section.title,
+                  style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600, height: 1.15, color: title)),
+              const SizedBox(height: 1),
+              Text(widget.section.subtitle ?? ' ',
+                  style: TextStyle(fontSize: 10.5, height: 1.15, color: sub)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The dropdown holding a site's boards.
+class SectionGroupMenu extends StatefulWidget {
+  const SectionGroupMenu({
+    super.key,
+    required this.label,
+    required this.sections,
+    required this.selectedId,
+    required this.onSelect,
+  });
+  final String label;
+  final List<Section> sections;
+  final String? selectedId;
+  final ValueChanged<String> onSelect;
+
+  @override
+  State<SectionGroupMenu> createState() => _SectionGroupMenuState();
+}
+
+class _SectionGroupMenuState extends State<SectionGroupMenu> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final current =
+        widget.sections.where((s) => s.id == widget.selectedId).firstOrNull;
+    final selected = current != null;
+    final title = selected ? p.accentInk : p.ink;
+    final sub = selected ? p.accentInk.withValues(alpha: 0.62) : p.inkFaint;
+
+    return MenuAnchor(
+      // The surface is handed over to _MenuPanel so the whole thing can
+      // animate in; a menu that simply appears is the one switch in the app
+      // that still snaps.
+      style: const MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(Colors.transparent),
+        surfaceTintColor: WidgetStatePropertyAll(Colors.transparent),
+        shadowColor: WidgetStatePropertyAll(Colors.transparent),
+        elevation: WidgetStatePropertyAll(0),
+        padding: WidgetStatePropertyAll(EdgeInsets.zero),
+        shape: WidgetStatePropertyAll(RoundedRectangleBorder()),
+      ),
+      menuChildren: [
+        _MenuPanel(
+          selectedIndex:
+              widget.sections.indexWhere((s) => s.id == widget.selectedId),
+          children: [
+        for (final s in widget.sections)
+          MenuItemButton(
+            style: MenuItemButton.styleFrom(
+              // A line of text is 16 high, so 36 leaves exactly 10 above and
+              // below it.
+              minimumSize: const Size(0, kMenuRowHeight),
+              maximumSize: const Size.fromHeight(kMenuRowHeight),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              visualDensity: VisualDensity.standard,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => widget.onSelect(s.id),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              // A minimum width lines the slugs up into a column without
+              // pushing them to the far edge, which is what spacing them apart
+              // did. A longer name simply grows past it.
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 74),
+                child: Text(
+                  s.title,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.2,
+                    fontWeight: s.id == widget.selectedId
+                        ? FontWeight.w600
+                        : FontWeight.w500,
+                    color: s.id == widget.selectedId ? p.accent : p.ink,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              if (s.subtitle != null)
+                Text(
+                  s.subtitle!,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    height: 1.2,
+                    color: s.id == widget.selectedId
+                        ? p.accent.withValues(alpha: 0.7)
+                        : p.inkFaint,
+                  ),
+                ),
+            ]),
+          ),
+        ]),
+      ],
+      builder: (context, controller, _) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: () => controller.isOpen ? controller.close() : controller.open(),
+          child: AnimatedContainer(
+            duration: Motion.quick,
+            curve: Motion.curve,
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.fromLTRB(15, 8, 9, 8),
+            decoration: BoxDecoration(
+              color: selected ? p.accent : (_hover ? p.raised : p.panel),
+              borderRadius: BorderRadius.circular(Radii.block),
+              border: Border.all(color: selected ? p.accent : p.line),
+            ),
+            child: Row(children: [
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(current?.title ?? widget.label,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          height: 1.15,
+                          color: title)),
+                  const SizedBox(height: 1),
+                  Text(current?.subtitle ?? '${widget.sections.length} 个${widget.label}',
+                      style: TextStyle(fontSize: 10.5, height: 1.15, color: sub)),
+                ],
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.expand_more_rounded,
+                  size: 16, color: selected ? p.accentInk : p.inkFaint),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The dropdown's own surface, so it can arrive rather than appear.
+///
+/// It grows from its top edge, which is where it is anchored, and fades in at
+/// the same rate as every other content switch in the app.
+class _MenuPanel extends StatefulWidget {
+  const _MenuPanel({required this.children, this.selectedIndex = -1});
+
+  final List<Widget> children;
+
+  /// Scrolled into view on open, so a board picked earlier is not hidden
+  /// below the fold. Negative when nothing is selected.
+  final int selectedIndex;
+
+  @override
+  State<_MenuPanel> createState() => _MenuPanelState();
+}
+
+class _MenuPanelState extends State<_MenuPanel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: Motion.swap,
+  )..forward();
+
+  late final Animation<double> _curved =
+      CurvedAnimation(parent: _controller, curve: Motion.curve);
+
+  final _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _revealSelected());
+  }
+
+  /// Centres the selected board in the visible window, when there is one and
+  /// the list is long enough to scroll.
+  void _revealSelected() {
+    if (!mounted || widget.selectedIndex < 0 || !_scroll.hasClients) return;
+    final viewport = _scroll.position.viewportDimension;
+    final target = widget.selectedIndex * kMenuRowHeight -
+        (viewport - kMenuRowHeight) / 2;
+    _scroll.jumpTo(target.clamp(0, _scroll.position.maxScrollExtent));
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return FadeTransition(
+      opacity: _curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, -0.04),
+          end: Offset.zero,
+        ).animate(_curved),
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.97, end: 1).animate(_curved),
+          alignment: Alignment.topCenter,
+          child: Container(
+            decoration: BoxDecoration(
+              color: p.panel,
+              borderRadius: BorderRadius.circular(Radii.card),
+              border: Border.all(color: p.line),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxHeight: kMenuRowHeight * kMenuVisibleRows,
+              ),
+              child: Scrollbar(
+                controller: _scroll,
+                child: SingleChildScrollView(
+                  controller: _scroll,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: widget.children,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
