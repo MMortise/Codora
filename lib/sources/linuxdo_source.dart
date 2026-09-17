@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../core/forum_source.dart';
@@ -307,6 +309,84 @@ class LinuxDoSource implements ForumSource {
     );
   }
 
+  // Discourse is a forum the app can actually answer, and the browser the
+  // feed runs in is already signed in to it. Anonymous readers get no box:
+  // there is nothing to send with.
+  @override
+  Future<Reply> Function(String topicId, String text)? get reply =>
+      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _reply : null;
+
+  Future<Reply> _reply(String topicId, String text) async {
+    _requireCookie();
+    final answer = await _post('/posts', {
+      'raw': text,
+      'topic_id': asInt(topicId) ?? topicId,
+    });
+    // Discourse answers with the post it made; some installs wrap it.
+    final post = answer['post'] as Map? ?? answer;
+    if (asInt(post['id']) == null) {
+      // It may well have gone out — saying nothing, or drawing an empty
+      // reply where theirs should be, would be worse than saying to look.
+      throw Exception('回复可能已经发出去了，但没读懂 linux.do 的回应，刷新一下看看');
+    }
+    return parsePost(post);
+  }
+
+  /// Sends something to linux.do, rather than asking it for something.
+  ///
+  /// Rails refuses a write that does not carry the CSRF token it handed this
+  /// session, and it is read here rather than kept: it belongs to the session
+  /// cookie, and that can be replaced under the app at any point by a sign-in
+  /// in the visible browser.
+  Future<Map> _post(String path, Map<String, Object?> body) async {
+    final csrf = '${(await _get('/session/csrf.json'))['csrf'] ?? ''}';
+    if (csrf.isEmpty) {
+      throw Exception('linux.do 没有给出提交凭证，重新登录一次再试');
+    }
+    try {
+      final answer = await WebViewFetcher.instance.postJson(
+        _origin,
+        path,
+        body: body,
+        headers: {'X-CSRF-Token': csrf},
+        userAgent: userAgent,
+      );
+      if (answer is! Map) throw Exception('linux.do 返回了意外的结果');
+      return answer;
+    } on WebViewFetchException catch (e) {
+      throw Exception(postProblem(e));
+    }
+  }
+
+  /// What to show when the forum refuses something.
+  ///
+  /// Discourse explains itself in the body — the post is too short, you are
+  /// posting too fast, the topic is closed — and that sentence is the only
+  /// part worth putting in front of anyone. A status code on its own says
+  /// nothing about what to do differently.
+  @visibleForTesting
+  static String postProblem(WebViewFetchException e) {
+    try {
+      final data = jsonDecode(e.body);
+      if (data is Map) {
+        final said = [
+          for (final line in (data['errors'] as List? ?? const []))
+            if ('$line'.trim().isNotEmpty) '$line'.trim(),
+        ];
+        if (said.isNotEmpty) return said.join('；');
+        final one = '${data['error'] ?? data['message'] ?? ''}'.trim();
+        if (one.isNotEmpty) return one;
+      }
+    } catch (_) {
+      // Not JSON. The status below is then all there is to go on.
+    }
+    if (e.isChallenge) return '人机验证过期了，用内置浏览器重新过一次';
+    if (e.status == 403) return '没有权限回复这个帖子';
+    if (e.status == 404) return '这个帖子不在了';
+    if (e.status == 0) return '没能把回复送出去，检查一下网络';
+    return '没能发送（HTTP ${e.status}）';
+  }
+
   @override
   String? topicIdFromUrl(Uri uri) {
     if (uri.host != 'linux.do' && !uri.host.endsWith('.linux.do')) return null;
@@ -356,7 +436,12 @@ class LinuxDoSource implements ForumSource {
     );
   }
 
-  Reply _mapPost(Map p) {
+  /// Built apart from the request, so what the forum makes of a reply can be
+  /// checked without sending one.
+  @visibleForTesting
+  static Reply parsePost(Map post) => _mapPost(post);
+
+  static Reply _mapPost(Map p) {
     int? likes = asInt(p['like_count']);
     if (likes == null) {
       for (final a in (p['actions_summary'] as List? ?? const []).cast<Map>()) {
@@ -373,14 +458,15 @@ class LinuxDoSource implements ForumSource {
     );
   }
 
-  Author _author(Map u) => Author(
+  static Author _author(Map u) => Author(
         name: '${u['username']}',
         avatarUrl: _avatarOf(u['avatar_template']?.toString()),
         url: 'https://linux.do/u/${u['username']}',
         tagline: u['name']?.toString(),
       );
 
-  Author? _postAuthor(Map p) => p['username'] == null ? null : _author(p);
+  static Author? _postAuthor(Map p) =>
+      p['username'] == null ? null : _author(p);
 
   void _requireCookie() {
     if (!cookieHeaderHas(cookie, 'cf_clearance')) {

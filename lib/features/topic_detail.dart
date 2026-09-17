@@ -14,6 +14,7 @@ import '../widgets/post_body.dart';
 import '../widgets/relative_time.dart';
 import '../widgets/swap.dart';
 import 'providers.dart';
+import 'reply_box.dart';
 
 /// Right-hand pane in the wide layout.
 class DetailPane extends ConsumerWidget {
@@ -193,6 +194,26 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     ref.invalidate(repliesProvider(widget.topic));
   }
 
+  /// Sends a reply and puts it at the end of the thread.
+  ///
+  /// Anything thrown here is the forum explaining why it refused, and the box
+  /// is what shows it — so it is left to travel back rather than caught.
+  Future<void> _send(
+      Future<Reply> Function(String, String) send, String text) async {
+    final posted = await send(widget.topic.id, text);
+    if (!ref.read(repliesProvider(widget.topic).notifier).appendSent(posted)) {
+      ref.invalidate(repliesProvider(widget.topic));
+      return;
+    }
+    // Their own reply is the one thing they want to see, and it is at the
+    // bottom. The list grows this frame, so the move waits for the next one.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(_scroll.position.maxScrollExtent,
+          duration: Motion.swap, curve: Motion.curve);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
@@ -304,6 +325,11 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
           ),
         ),
       ),
+      // Only where there is somewhere for it to go: a site the app can write
+      // to, signed in, and a post that actually loaded.
+      if (detail.hasValue)
+        if (source.reply case final send?)
+          ReplyBox(onSend: (text) => _send(send, text)),
     ]);
   }
 
@@ -333,10 +359,12 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
       ],
       data: (r) => [
         SliverList.builder(
-          itemCount: r.items.length,
+          // `all` rather than the page: a reply written here sits at the end
+          // of the thread, where its writer left it.
+          itemCount: r.all.length,
           itemBuilder: (context, i) => ReplyTile(
             first: i == 0,
-            reply: r.items[i],
+            reply: r.all[i],
             baseUrl: baseUrl,
             onTopicLink: _handleLink,
             images: _images,

@@ -62,6 +62,20 @@ abstract class ForumSource {
   /// token, and hands back null without one.
   Future<Member> Function()? get member => null;
 
+  /// How to answer a topic, or null when this site cannot be written to —
+  /// either it has no way in, or the stored credentials do not sign the
+  /// reader in.
+  ///
+  /// A field for the same reason as [member]: the reading pane has to know
+  /// whether to offer a box before anyone types in it, and asking would mean
+  /// a request.
+  ///
+  /// It answers with the reply the site made of the text, not with nothing:
+  /// the pane puts that at the end of the thread rather than reloading, which
+  /// would take the reader back to the first page of something they had
+  /// scrolled through, with their own words the part not loaded.
+  Future<Reply> Function(String topicId, String text)? get reply => null;
+
   /// If [uri] points at a topic on this site, return its id.
   String? topicIdFromUrl(Uri uri);
 }

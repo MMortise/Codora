@@ -370,13 +370,26 @@ class RepliesState {
     this.total,
     this.loadingMore = false,
     this.moreError,
+    this.sent = const [],
   });
   final List<Reply> items;
   final String? nextCursor;
   final int? total;
   final bool loadingMore;
   final String? moreError;
+
+  /// Replies written from here, which stay at the end of the thread.
+  ///
+  /// Held apart from [items] because a thread arrives a page at a time: put
+  /// in with the page, the next page — older posts — would be drawn after
+  /// them.
+  final List<Reply> sent;
+
   bool get hasMore => nextCursor != null;
+
+  /// The thread as it should be read: what has been loaded, then whatever the
+  /// reader has just written.
+  List<Reply> get all => sent.isEmpty ? items : [...items, ...sent];
 }
 
 class RepliesNotifier extends FamilyAsyncNotifier<RepliesState, TopicRef> {
@@ -399,6 +412,7 @@ class RepliesNotifier extends FamilyAsyncNotifier<RepliesState, TopicRef> {
         items: cur.items,
         nextCursor: cur.nextCursor,
         total: cur.total,
+        sent: cur.sent,
         loadingMore: true));
     try {
       final page = await _source.fetchReplies(arg.id, cursor: cur.nextCursor);
@@ -406,14 +420,36 @@ class RepliesNotifier extends FamilyAsyncNotifier<RepliesState, TopicRef> {
         items: [...cur.items, ...page.items],
         nextCursor: page.nextCursor,
         total: page.total ?? cur.total,
+        sent: cur.sent,
       ));
     } catch (e) {
       state = AsyncData(RepliesState(
           items: cur.items,
           nextCursor: cur.nextCursor,
           total: cur.total,
+          sent: cur.sent,
           moreError: '$e'));
     }
+  }
+
+  /// Puts a reply the reader has just written at the end of the thread.
+  ///
+  /// Rather than reloading: they are at the bottom of something they scrolled
+  /// through, and a reload would take them back to its first page with their
+  /// own words the part not loaded. The count moves with it, since the forum
+  /// now holds one more than it said.
+  /// False when there is no thread on screen to put it in — the caller then
+  /// has nothing to preserve and can simply reload.
+  bool appendSent(Reply reply) {
+    final cur = state.valueOrNull;
+    if (cur == null) return false;
+    state = AsyncData(RepliesState(
+      items: cur.items,
+      nextCursor: cur.nextCursor,
+      total: cur.total == null ? null : cur.total! + 1,
+      sent: [...cur.sent, reply],
+    ));
+    return true;
   }
 }
 

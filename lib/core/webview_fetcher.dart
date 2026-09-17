@@ -46,27 +46,75 @@ class WebViewFetcher {
     String path, {
     required String userAgent,
     Duration timeout = const Duration(seconds: 30),
+  }) =>
+      _json(origin, path, userAgent: userAgent, timeout: timeout);
+
+  /// POSTs [body] as JSON and returns the decoded answer.
+  ///
+  /// Everything [getJson] says applies here and then some: a write has to
+  /// carry the session the site issued, and the session the site issued is
+  /// the one in this browser. [headers] is where a site's own condition goes
+  /// — Discourse will not take a write without the CSRF token it handed out.
+  ///
+  /// The status comes back on the exception rather than as a thrown string,
+  /// because a refusal here is usually the site explaining itself (too short,
+  /// too soon, the topic is closed) and the caller is the one that knows how
+  /// to read it.
+  Future<Object?> postJson(
+    Uri origin,
+    String path, {
+    required Object? body,
+    required String userAgent,
+    Map<String, String> headers = const {},
+    Duration timeout = const Duration(seconds: 30),
+  }) =>
+      _json(origin, path,
+          userAgent: userAgent,
+          method: 'POST',
+          body: jsonEncode(body),
+          headers: headers,
+          timeout: timeout);
+
+  Future<Object?> _json(
+    Uri origin,
+    String path, {
+    required String userAgent,
+    required Duration timeout,
+    String method = 'GET',
+    String? body,
+    Map<String, String> headers = const {},
   }) async {
     final session = await _session(origin, userAgent);
     final result = await session.controller
         .callAsyncJavaScript(
           functionBody: '''
             try {
-              const res = await fetch(path, {
+              const init = {
+                method: method,
                 credentials: 'include',
-                headers: {
+                headers: Object.assign({
                   'Accept': 'application/json',
                   'X-Requested-With': 'XMLHttpRequest',
                   'Discourse-Present': 'true',
-                },
-              });
-              const body = await res.text();
-              return { ok: true, status: res.status, body: body };
+                }, headers),
+              };
+              if (body !== null && body !== undefined) {
+                init.body = body;
+                init.headers['Content-Type'] = 'application/json';
+              }
+              const res = await fetch(path, init);
+              const text = await res.text();
+              return { ok: true, status: res.status, body: text };
             } catch (e) {
               return { ok: false, status: 0, body: String(e) };
             }
           ''',
-          arguments: {'path': path},
+          arguments: {
+            'path': path,
+            'method': method,
+            'body': body,
+            'headers': headers,
+          },
         )
         .timeout(timeout);
 
@@ -76,14 +124,14 @@ class WebViewFetcher {
     final value = result.value;
     if (value is! Map) throw WebViewFetchException(0, '页面脚本返回了意外的结果');
     final status = (value['status'] as num?)?.toInt() ?? 0;
-    final body = '${value['body'] ?? ''}';
-    if (value['ok'] != true) throw WebViewFetchException(status, body);
-    if (status >= 400) throw WebViewFetchException(status, body);
-    if (body.trimLeft().startsWith('<')) {
+    final text = '${value['body'] ?? ''}';
+    if (value['ok'] != true) throw WebViewFetchException(status, text);
+    if (status >= 400) throw WebViewFetchException(status, text);
+    if (text.trimLeft().startsWith('<')) {
       throw WebViewFetchException(status, '收到的是网页而不是数据');
     }
     try {
-      return jsonDecode(body);
+      return jsonDecode(text);
     } on FormatException {
       throw WebViewFetchException(status, '返回内容不是 JSON');
     }

@@ -87,6 +87,11 @@ class V2exSource implements ForumSource {
   @override
   Future<Member> Function()? get member => token.isEmpty ? null : _fetchMember;
 
+  // Reading only. The v2 API has no write side at all — replying on V2EX
+  // needs a web session and the form's own once-off token.
+  @override
+  Future<Reply> Function(String, String)? get reply => null;
+
   /// How long the card waits before saying so. [kMemberDeadline] is where
   /// the number is argued; it is named again here because the sentence below
   /// quotes it.

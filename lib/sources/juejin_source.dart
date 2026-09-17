@@ -38,6 +38,11 @@ class JuejinSource implements ForumSource {
   @override
   Future<Member> Function()? get member => null;
 
+  // Reading only. 掘金's write endpoints want a signature the app does not
+  // have any way to produce.
+  @override
+  Future<Reply> Function(String, String)? get reply => null;
+
   @override
   SiteAccess get access => cookie.isEmpty
       ? const SiteAccess(AccessLevel.open, '匿名浏览')
