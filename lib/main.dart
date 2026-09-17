@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_theme.dart';
+import 'core/disk_cache.dart';
+import 'core/linuxdo_session.dart';
 import 'core/read_log.dart';
 import 'core/settings.dart';
 import 'features/providers.dart';
@@ -18,6 +20,16 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppSettings.bootstrap = await AppSettings.load();
   ReadLog.bootstrap = await ReadLog.load();
+  // Opened before the first frame so the first avatar already has somewhere
+  // to look, and trimmed now in case the budget was lowered last time.
+  await DiskCache.instance.prepare(budget: AppSettings.bootstrap.cacheLimit);
+  // The browser linux.do is read through starts each launch with whatever
+  // WebKit persisted, which is not necessarily what was saved here. Seeding
+  // it from settings makes the stored credentials the ones that are actually
+  // sent, and a launch failing to do so must not stop the app opening.
+  try {
+    await applyLinuxDoCookies(AppSettings.bootstrap.linuxdoCookie);
+  } catch (_) {}
   if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
     await windowManager.ensureInitialized();
     const options = WindowOptions(

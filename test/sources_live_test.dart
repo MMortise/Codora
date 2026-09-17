@@ -14,6 +14,12 @@ import 'package:flutter_test/flutter_test.dart';
 const live = bool.fromEnvironment('LIVE');
 const linuxdoCookie = String.fromEnvironment('LINUXDO_COOKIE');
 
+/// The profile card needs credentials of its own, and a reader whose network
+/// cannot reach V2EX directly needs the proxy too, so they are separate from
+/// [live] rather than folded into it.
+const v2exToken = String.fromEnvironment('V2EX_TOKEN');
+const v2exProxy = String.fromEnvironment('V2EX_PROXY');
+
 void main() {
   group('V2EX', () {
     final src = V2exSource();
@@ -74,6 +80,48 @@ void main() {
       expect(src.topicIdFromUrl(Uri.parse('https://www.v2ex.com/t/1242215#reply3')), '1242215');
       expect(src.topicIdFromUrl(Uri.parse('https://example.com/t/1')), isNull);
     });
+  }, skip: live ? false : 'set --dart-define=LIVE=true');
+
+  group('V2EX profile card', () {
+    final src = V2exSource(token: v2exToken, proxy: v2exProxy);
+
+    test('reads the reader and their inbox in one go', () async {
+      final member = await src.member!();
+      expect(member.name, isNotEmpty);
+      expect(member.number, isNotNull, reason: 'the signup number');
+      expect(member.joinedAt, isNotNull);
+      expect(member.avatarUrl, startsWith('https://'));
+      // A page of ten, out of however many the account has collected.
+      expect(member.notifications.length, lessThanOrEqualTo(10));
+      if (member.notifications.isNotEmpty) {
+        expect(member.notificationTotal,
+            greaterThanOrEqualTo(member.notifications.length));
+        expect(member.notifications.first.text, isNotEmpty);
+        expect(member.notifications.first.text, isNot(contains('<')),
+            reason: 'flattened out of HTML');
+        expect(member.newestNotification, greaterThan(0));
+      }
+    });
+  }, skip: v2exToken.isEmpty ? 'set --dart-define=V2EX_TOKEN=...' : false);
+
+  group('the 测试 button', () {
+    test('reports how long the configured route takes', () async {
+      final src = V2exSource(proxy: v2exProxy);
+      addTearDown(src.close);
+      final took = await src.probe();
+      expect(took, lessThan(V2exSource.probeDeadline));
+      // ignore: avoid_print
+      print('  probe via ${v2exProxy.isEmpty ? "直连" : v2exProxy}: '
+          '${took.inMilliseconds}ms');
+    });
+
+    test('an address with nothing behind it fails rather than hanging',
+        () async {
+      // 198.51.100.0/24 is reserved for documentation, so nothing answers.
+      final src = V2exSource(proxy: '198.51.100.1:9');
+      addTearDown(src.close);
+      await expectLater(src.probe(), throwsA(isA<Object>()));
+    }, timeout: const Timeout(Duration(seconds: 40)));
   }, skip: live ? false : 'set --dart-define=LIVE=true');
 
   group('Juejin', () {

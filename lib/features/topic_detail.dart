@@ -14,6 +14,7 @@ import '../widgets/post_body.dart';
 import '../widgets/relative_time.dart';
 import '../widgets/swap.dart';
 import 'providers.dart';
+import 'reply_box.dart';
 
 /// Right-hand pane in the wide layout.
 class DetailPane extends ConsumerWidget {
@@ -193,6 +194,26 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     ref.invalidate(repliesProvider(widget.topic));
   }
 
+  /// Sends a reply and puts it at the end of the thread.
+  ///
+  /// Anything thrown here is the forum explaining why it refused, and the box
+  /// is what shows it — so it is left to travel back rather than caught.
+  Future<void> _send(
+      Future<Reply> Function(String, String) send, String text) async {
+    final posted = await send(widget.topic.id, text);
+    if (!ref.read(repliesProvider(widget.topic).notifier).appendSent(posted)) {
+      ref.invalidate(repliesProvider(widget.topic));
+      return;
+    }
+    // Their own reply is the one thing they want to see, and it is at the
+    // bottom. The list grows this frame, so the move waits for the next one.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(_scroll.position.maxScrollExtent,
+          duration: Motion.swap, curve: Motion.curve);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
@@ -280,14 +301,19 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                 ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(30, 6, 30, 4),
+                    padding: const EdgeInsets.fromLTRB(30, 10, 30, 2),
+                    // Two rules of equal flex put the count in the middle of
+                    // the pane, reading as the seam between the post and the
+                    // thread rather than as a heading over it.
                     child: Row(children: [
+                      Expanded(child: Container(height: 1, color: p.line)),
+                      const SizedBox(width: 14),
                       Text(_repliesTitle(d, replies.valueOrNull),
                           style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
                               color: p.inkMuted)),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 14),
                       Expanded(child: Container(height: 1, color: p.line)),
                     ]),
                   ),
@@ -299,6 +325,11 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
           ),
         ),
       ),
+      // Only where there is somewhere for it to go: a site the app can write
+      // to, signed in, and a post that actually loaded.
+      if (detail.hasValue)
+        if (source.reply case final send?)
+          ReplyBox(onSend: (text) => _send(send, text)),
     ]);
   }
 
@@ -328,9 +359,12 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
       ],
       data: (r) => [
         SliverList.builder(
-          itemCount: r.items.length,
+          // `all` rather than the page: a reply written here sits at the end
+          // of the thread, where its writer left it.
+          itemCount: r.all.length,
           itemBuilder: (context, i) => ReplyTile(
-            reply: r.items[i],
+            first: i == 0,
+            reply: r.all[i],
             baseUrl: baseUrl,
             onTopicLink: _handleLink,
             images: _images,
@@ -461,6 +495,7 @@ class ReplyTile extends StatelessWidget {
     required this.onTopicLink,
     this.images = SiteImages.plain,
     this.nested = false,
+    this.first = false,
   });
 
   final Reply reply;
@@ -468,6 +503,10 @@ class ReplyTile extends StatelessWidget {
   final bool Function(Uri) onTopicLink;
   final SiteImages images;
   final bool nested;
+
+  /// The first reply in the thread, which the count's own rule already sits
+  /// above — a border here would draw a second line right under it.
+  final bool first;
 
   @override
   Widget build(BuildContext context) {
@@ -555,7 +594,7 @@ class ReplyTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(30, 16, 30, 16),
       decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: p.line)),
+        border: first ? null : Border(top: BorderSide(color: p.line)),
       ),
       child: body,
     );

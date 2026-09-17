@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app_theme.dart';
 import '../core/models.dart';
+import '../core/util.dart';
 import '../features/linuxdo_auth_page.dart';
 import '../features/providers.dart';
 
@@ -19,7 +20,7 @@ class ErrorView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.palette;
     final auth = error is AuthRequiredException ? error as AuthRequiredException : null;
-    final message = auth?.message ?? error.toString().replaceFirst('Exception: ', '');
+    final message = auth?.message ?? errorText(error);
 
     return Center(
       child: Padding(

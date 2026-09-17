@@ -32,6 +32,17 @@ class JuejinSource implements ForumSource {
   @override
   SiteImages get images => SiteImages.plain;
 
+  // 掘金's own API describes the signed-in reader, but the rail card is
+  // built around a forum inbox and 掘金 keeps its notifications somewhere
+  // else entirely. Nothing to show here yet.
+  @override
+  Future<Member> Function()? get member => null;
+
+  // Reading only. 掘金's write endpoints want a signature the app does not
+  // have any way to produce.
+  @override
+  Future<Reply> Function(String, String)? get reply => null;
+
   @override
   SiteAccess get access => cookie.isEmpty
       ? const SiteAccess(AccessLevel.open, '匿名浏览')

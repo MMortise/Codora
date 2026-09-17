@@ -6,8 +6,10 @@ import 'package:window_manager/window_manager.dart';
 import '../app_theme.dart';
 import '../core/models.dart';
 import '../widgets/chrome.dart';
+import '../widgets/hover_flyout.dart';
 import '../widgets/site_icon.dart';
 import '../widgets/swap.dart';
+import 'member_card.dart';
 import 'providers.dart';
 import 'settings_page.dart';
 import 'topic_detail.dart';
@@ -84,6 +86,10 @@ class _Rail extends ConsumerWidget {
     final nav = ref.watch(currentNavProvider);
     final p = context.palette;
     final sources = ref.watch(visibleSourcesProvider);
+    // The rail is the one thing always on screen, so it is what holds the
+    // profiles open: they load as the app comes up and stay current, rather
+    // than making whoever hovers first wait for a request.
+    ref.watch(loadedMembersProvider);
 
     return Container(
       width: 64,
@@ -102,6 +108,13 @@ class _Rail extends ConsumerWidget {
             label: '${source.name} · ${source.access.label}',
             selected: nav.site == source.id,
             status: _statusColor(p, source.access.level),
+            // Sites that can say who the reader is get a card instead of a
+            // tooltip; the rest keep the tooltip. Reading the same field the
+            // card fetches through means a token typed in settings puts the
+            // card here on the next frame, with nothing fetched until hover.
+            flyout: source.member == null
+                ? null
+                : MemberCard(site: source.id),
             onTap: () =>
                 ref.read(navProvider.notifier).state = source.id.target,
           ),
@@ -126,13 +139,14 @@ class _Rail extends ConsumerWidget {
       };
 }
 
-class _RailBlock extends StatefulWidget {
+class _RailBlock extends StatelessWidget {
   const _RailBlock({
     required this.icon,
     required this.label,
     required this.selected,
     required this.onTap,
     this.status,
+    this.flyout,
   });
 
   final Widget icon;
@@ -141,70 +155,70 @@ class _RailBlock extends StatefulWidget {
   final VoidCallback onTap;
   final Color? status;
 
-  @override
-  State<_RailBlock> createState() => _RailBlockState();
-}
-
-class _RailBlockState extends State<_RailBlock> {
-  bool _hover = false;
+  /// Panel shown to the right while the pointer rests here, in place of the
+  /// tooltip. Mounted only while open, so a block with one costs nothing
+  /// until someone looks at it.
+  final Widget? flyout;
 
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    final selected = widget.selected;
-    return Tooltip(
-      message: widget.label,
-      preferBelow: false,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: AnimatedContainer(
-            duration: Motion.quick,
-            curve: Motion.curve,
-            width: 40,
-            height: 40,
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-            decoration: BoxDecoration(
-              // The logos bring their own colours, so the current site is
-              // marked by the surface and ring, never by the mark itself.
-              color: selected
-                  ? p.accentSoft
-                  : (_hover ? p.raised : p.panel),
-              borderRadius: BorderRadius.circular(Radii.block),
-              border: Border.all(
-                color: selected ? p.accent : p.line,
-                width: selected ? 1.6 : 1,
-              ),
-            ),
-            child: Stack(children: [
-              Center(
-                child: IconTheme(
-                  data: IconThemeData(
-                      size: 18, color: selected ? p.ink : p.inkMuted),
-                  child: widget.icon,
+    return HoverFlyout(
+      panel: flyout,
+      builder: (context, hovered) {
+        final block = MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: onTap,
+            child: AnimatedContainer(
+              duration: Motion.quick,
+              curve: Motion.curve,
+              width: 40,
+              height: 40,
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                // The logos bring their own colours, so the current site is
+                // marked by the surface and ring, never by the mark itself.
+                color: selected ? p.accentSoft : (hovered ? p.raised : p.panel),
+                borderRadius: BorderRadius.circular(Radii.block),
+                border: Border.all(
+                  color: selected ? p.accent : p.line,
+                  width: selected ? 1.6 : 1,
                 ),
               ),
-              if (widget.status != null)
-                Positioned(
-                  right: 4,
-                  top: 4,
-                  child: Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: widget.status,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: p.panel, width: 1),
-                    ),
+              child: Stack(children: [
+                Center(
+                  child: IconTheme(
+                    data: IconThemeData(
+                        size: 18, color: selected ? p.ink : p.inkMuted),
+                    child: icon,
                   ),
                 ),
-            ]),
+                if (status != null)
+                  Positioned(
+                    right: 4,
+                    top: 4,
+                    child: Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: status,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: p.panel, width: 1),
+                      ),
+                    ),
+                  ),
+              ]),
+            ),
           ),
-        ),
-      ),
+        );
+        // A block with a panel has no tooltip: the panel names the site and
+        // says more about it than the label could, and two of them arriving
+        // at once is one too many.
+        return flyout == null
+            ? Tooltip(message: label, preferBelow: false, child: block)
+            : block;
+      },
     );
   }
 }

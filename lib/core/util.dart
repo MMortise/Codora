@@ -28,6 +28,21 @@ String htmlToPreview(String? html, {int max = 160}) {
   return oneLine.length > max ? '${oneLine.substring(0, max)}…' : oneLine;
 }
 
+/// What to put in front of a reader when something threw.
+///
+/// `Exception.toString()` prefixes the class name, which means nothing to
+/// anyone: the sources write the sentence they want shown, and it is the
+/// sentence that should appear.
+String errorText(Object error) => '$error'.replaceFirst('Exception: ', '');
+
+/// Whether a `Cookie:` header carries a cookie called [name].
+///
+/// Searching the header for `'$name='` is close enough to work until it is
+/// not: `visit_t=…` contains `_t=`, which would report a reader who has just
+/// signed out as still signed in. Names are compared whole.
+bool cookieHeaderHas(String header, String name) =>
+    header.split(';').any((pair) => pair.trim().split('=').first == name);
+
 String compactCount(int? n) {
   if (n == null) return '';
   if (n < 1000) return '$n';

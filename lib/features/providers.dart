@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/disk_cache.dart';
 import '../core/forum_source.dart';
+import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/read_log.dart';
 import '../core/settings.dart';
@@ -69,11 +73,21 @@ class SettingsNotifier extends Notifier<AppSettings> {
     state = next;
     AppSettings.bootstrap = next;
     await next.save();
-    // A site's hidden WebView holds the old cookies, so drop it when its
-    // credentials change.
+    // The cache is a live object, not a stored number: a budget lowered here
+    // has to take effect now, not the next time enough pictures happen to
+    // trigger a trim.
+    if (next.cacheLimit != prev.cacheLimit) {
+      DiskCache.instance.limit = next.cacheLimit;
+      unawaited(DiskCache.instance.trimTo(next.cacheLimit));
+    }
+    // linux.do is read inside a WebView, which sends its own cookie jar and
+    // knows nothing about what is stored here. Credentials have to be put
+    // there or they change what the app believes without changing what it
+    // sends. The hidden WebView is then dropped, since it holds the old ones.
     if (next.linuxdoCookie != prev.linuxdoCookie ||
         next.linuxdoUserAgent != prev.linuxdoUserAgent) {
-      await WebViewFetcher.instance.reset(Uri.parse('https://linux.do'));
+      await applyLinuxDoCookies(next.linuxdoCookie);
+      await WebViewFetcher.instance.reset(linuxdoOrigin);
     }
   }
 }
@@ -140,6 +154,88 @@ final siteImagesProvider = Provider.family<SiteImages, SiteId>((ref, site) {
   // no other reason — a rewritten address with one kind of proxy, a loader
   // with the other — so opting out means an ordinary request.
   return proxied ? images : SiteImages.plain;
+});
+
+/// How long a profile is good for.
+///
+/// It is a slow-moving page — a tagline, a signup number, an inbox that gains
+/// a line now and then. Refreshing on a clock rather than when someone looks
+/// is the point: the card should already be right when it opens, instead of
+/// being one request behind whoever opened it.
+const memberFreshFor = Duration(hours: 1);
+
+/// How soon to try again after a failure.
+///
+/// A profile that could not be read is not a cache. The usual cause is a
+/// proxy having a bad minute, and sitting out the full hour would leave the
+/// card wrong for far longer than the problem lasted.
+const memberRetryAfter = Duration(minutes: 1);
+
+/// Who the stored credentials sign the reader in as.
+///
+/// Loaded when the app opens rather than when a pointer arrives — see
+/// [loadedMembersProvider] — and kept current by re-reading itself on a
+/// timer, so nothing about the card waits on a hover.
+class MemberNotifier extends AutoDisposeFamilyAsyncNotifier<Member, SiteId> {
+  Timer? _next;
+
+  /// Which read counts as the current one.
+  ///
+  /// A fetch can outlive the build that started it — the site is switched off
+  /// while it is in flight, or a credential changes under it. Arming the
+  /// timer from a fetch nobody is waiting for any more would leave a timer
+  /// nothing cancels, pointed at a provider that is gone.
+  Object? _reading;
+
+  @override
+  Future<Member> build(SiteId arg) async {
+    final fetch = ref.watch(sourceProvider(arg)).member;
+    final reading = Object();
+    _reading = reading;
+    ref.onDispose(() {
+      _next?.cancel();
+      if (identical(_reading, reading)) _reading = null;
+    });
+    // Only reachable if the credentials went away mid-flight; the rail reads
+    // the same field to decide whether to load a profile at all.
+    if (fetch == null) throw StateError('${arg.label} 现在没有可读的个人信息');
+    try {
+      final member = await fetch();
+      _again(memberFreshFor, reading);
+      return member;
+    } catch (_) {
+      _again(memberRetryAfter, reading);
+      rethrow;
+    }
+  }
+
+  void _again(Duration after, Object reading) {
+    if (!identical(_reading, reading)) return;
+    _next?.cancel();
+    _next = Timer(after, ref.invalidateSelf);
+  }
+}
+
+final memberProvider =
+    AsyncNotifierProvider.autoDispose.family<MemberNotifier, Member, SiteId>(
+        MemberNotifier.new);
+
+/// The sites whose profile is loaded up front and kept current.
+///
+/// Watching a provider is what starts it, so this is where the loading
+/// actually happens. The rail watches this and the rail is always on screen,
+/// which means the profiles are read as the app comes up and stay warm for as
+/// long as their site is on the rail — a site switched off stops being asked
+/// about, along with everything else it was doing in the background.
+final loadedMembersProvider = Provider<List<SiteId>>((ref) {
+  final sites = [
+    for (final source in ref.watch(visibleSourcesProvider))
+      if (source.member != null) source.id,
+  ];
+  for (final site in sites) {
+    ref.watch(memberProvider(site));
+  }
+  return sites;
 });
 
 /// Every site in display order, including the ones switched off — the
@@ -274,13 +370,26 @@ class RepliesState {
     this.total,
     this.loadingMore = false,
     this.moreError,
+    this.sent = const [],
   });
   final List<Reply> items;
   final String? nextCursor;
   final int? total;
   final bool loadingMore;
   final String? moreError;
+
+  /// Replies written from here, which stay at the end of the thread.
+  ///
+  /// Held apart from [items] because a thread arrives a page at a time: put
+  /// in with the page, the next page — older posts — would be drawn after
+  /// them.
+  final List<Reply> sent;
+
   bool get hasMore => nextCursor != null;
+
+  /// The thread as it should be read: what has been loaded, then whatever the
+  /// reader has just written.
+  List<Reply> get all => sent.isEmpty ? items : [...items, ...sent];
 }
 
 class RepliesNotifier extends FamilyAsyncNotifier<RepliesState, TopicRef> {
@@ -303,6 +412,7 @@ class RepliesNotifier extends FamilyAsyncNotifier<RepliesState, TopicRef> {
         items: cur.items,
         nextCursor: cur.nextCursor,
         total: cur.total,
+        sent: cur.sent,
         loadingMore: true));
     try {
       final page = await _source.fetchReplies(arg.id, cursor: cur.nextCursor);
@@ -310,14 +420,36 @@ class RepliesNotifier extends FamilyAsyncNotifier<RepliesState, TopicRef> {
         items: [...cur.items, ...page.items],
         nextCursor: page.nextCursor,
         total: page.total ?? cur.total,
+        sent: cur.sent,
       ));
     } catch (e) {
       state = AsyncData(RepliesState(
           items: cur.items,
           nextCursor: cur.nextCursor,
           total: cur.total,
+          sent: cur.sent,
           moreError: '$e'));
     }
+  }
+
+  /// Puts a reply the reader has just written at the end of the thread.
+  ///
+  /// Rather than reloading: they are at the bottom of something they scrolled
+  /// through, and a reload would take them back to its first page with their
+  /// own words the part not loaded. The count moves with it, since the forum
+  /// now holds one more than it said.
+  /// False when there is no thread on screen to put it in — the caller then
+  /// has nothing to preserve and can simply reload.
+  bool appendSent(Reply reply) {
+    final cur = state.valueOrNull;
+    if (cur == null) return false;
+    state = AsyncData(RepliesState(
+      items: cur.items,
+      nextCursor: cur.nextCursor,
+      total: cur.total == null ? null : cur.total! + 1,
+      sent: [...cur.sent, reply],
+    ));
+    return true;
   }
 }
 

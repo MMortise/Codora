@@ -177,7 +177,10 @@ class _MarkdownBody extends StatelessWidget {
       ),
       styleSheet: MarkdownStyleSheet(
         p: body,
-        a: TextStyle(fontSize: size, color: p.accent),
+        // The same line height as the paragraph it sits in. The HTML
+        // renderer inherits it; this one was setting a style from scratch and
+        // quietly leaving a link on a different metric from its own sentence.
+        a: TextStyle(fontSize: size, height: 1.65, color: p.accent),
         em: body.copyWith(fontStyle: FontStyle.italic),
         strong: body.copyWith(fontWeight: FontWeight.w600),
         del: body.copyWith(decoration: TextDecoration.lineThrough),

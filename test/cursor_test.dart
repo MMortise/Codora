@@ -177,4 +177,70 @@ void main() {
       expect(cursorOf(tester), SystemMouseCursors.forbidden);
     });
   });
+
+  // Material's own default for these is `adaptiveClickable`, which leaves the
+  // plain arrow on desktop and only shows a hand on the web. Everything else
+  // in the app already shows the hand, so a button that kept the arrow would
+  // be the one control that looked inert.
+  group('the controls Material styles for us', () {
+    Future<void> pumpControls(WidgetTester tester,
+        {required bool enabled}) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(Brightness.dark),
+        home: Scaffold(
+          body: Column(children: [
+            FilledButton(
+                onPressed: enabled ? () {} : null, child: const Text('保存')),
+            OutlinedButton(
+                onPressed: enabled ? () {} : null, child: const Text('测试')),
+            TextButton(
+                onPressed: enabled ? () {} : null, child: const Text('了解更多')),
+            MenuItemButton(
+                onPressed: enabled ? () {} : null, child: const Text('程序员')),
+            Switch(value: false, onChanged: enabled ? (_) {} : null),
+          ]),
+        ),
+      ));
+      await tester.pump();
+    }
+
+    /// Every cursor declared around and inside [of] — a button carries its own
+    /// on an ancestor of the label, a switch on a descendant.
+    List<MouseCursor> cursorsAt(WidgetTester tester, Finder of) => tester
+        .widgetList<MouseRegion>(
+            find.ancestor(of: of, matching: find.byType(MouseRegion)))
+        .followedBy(tester.widgetList<MouseRegion>(
+            find.descendant(of: of, matching: find.byType(MouseRegion))))
+        .map((r) => r.cursor)
+        .where((c) => c != MouseCursor.defer)
+        .toList();
+
+    final controls = {
+      '保存': find.text('保存'),
+      '测试': find.text('测试'),
+      '了解更多': find.text('了解更多'),
+      '程序员': find.text('程序员'),
+    };
+
+    testWidgets('all show a pointer when they can be pressed', (tester) async {
+      await pumpControls(tester, enabled: true);
+      for (final entry in controls.entries) {
+        expect(cursorsAt(tester, entry.value), contains(SystemMouseCursors.click),
+            reason: '${entry.key} should invite the pointer');
+      }
+      expect(cursorsAt(tester, find.byType(Switch)),
+          contains(SystemMouseCursors.click));
+    });
+
+    testWidgets('all refuse it when they cannot', (tester) async {
+      await pumpControls(tester, enabled: false);
+      for (final entry in controls.entries) {
+        expect(cursorsAt(tester, entry.value),
+            contains(SystemMouseCursors.forbidden),
+            reason: '${entry.key} should say so before it is clicked');
+      }
+      expect(cursorsAt(tester, find.byType(Switch)),
+          contains(SystemMouseCursors.forbidden));
+    });
+  });
 }
