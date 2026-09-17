@@ -280,14 +280,19 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                 ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(30, 6, 30, 4),
+                    padding: const EdgeInsets.fromLTRB(30, 10, 30, 2),
+                    // Two rules of equal flex put the count in the middle of
+                    // the pane, reading as the seam between the post and the
+                    // thread rather than as a heading over it.
                     child: Row(children: [
+                      Expanded(child: Container(height: 1, color: p.line)),
+                      const SizedBox(width: 14),
                       Text(_repliesTitle(d, replies.valueOrNull),
                           style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
                               color: p.inkMuted)),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 14),
                       Expanded(child: Container(height: 1, color: p.line)),
                     ]),
                   ),
@@ -330,6 +335,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
         SliverList.builder(
           itemCount: r.items.length,
           itemBuilder: (context, i) => ReplyTile(
+            first: i == 0,
             reply: r.items[i],
             baseUrl: baseUrl,
             onTopicLink: _handleLink,
@@ -461,6 +467,7 @@ class ReplyTile extends StatelessWidget {
     required this.onTopicLink,
     this.images = SiteImages.plain,
     this.nested = false,
+    this.first = false,
   });
 
   final Reply reply;
@@ -468,6 +475,10 @@ class ReplyTile extends StatelessWidget {
   final bool Function(Uri) onTopicLink;
   final SiteImages images;
   final bool nested;
+
+  /// The first reply in the thread, which the count's own rule already sits
+  /// above — a border here would draw a second line right under it.
+  final bool first;
 
   @override
   Widget build(BuildContext context) {
@@ -555,7 +566,7 @@ class ReplyTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(30, 16, 30, 16),
       decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: p.line)),
+        border: first ? null : Border(top: BorderSide(color: p.line)),
       ),
       child: body,
     );
