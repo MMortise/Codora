@@ -386,6 +386,11 @@ class SiteCard extends StatelessWidget {
     final plain = fields.where((c) => !c.advanced).toList();
     final advanced = fields.where((c) => c.advanced).toList();
 
+    // Clearing a credential is the other half of saving it, so it sits beside
+    // whichever control sets it: the field's own 保存 when the reader types
+    // the credential, and the verify button when a browser earns it instead.
+    final clearBesideField = onClear != null && plain.isNotEmpty;
+
     return Panel(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       margin: const EdgeInsets.only(bottom: 12),
@@ -438,7 +443,7 @@ class SiteCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(source.accessNote,
                 style: Theme.of(context).textTheme.bodySmall),
-            if (onOpenBrowser != null || onClear != null) ...[
+            if (onOpenBrowser != null || (onClear != null && !clearBesideField)) ...[
               const SizedBox(height: 16),
               SizedBox(
                 height: kControlHeight,
@@ -450,17 +455,20 @@ class SiteCard extends StatelessWidget {
                           ? '开始验证'
                           : '重新验证'),
                     ),
-                  if (onOpenBrowser != null && onClear != null)
+                  if (onOpenBrowser != null && !clearBesideField)
                     const SizedBox(width: 8),
-                  if (onClear != null)
+                  if (!clearBesideField)
                     OutlinedButton(
                         onPressed: onClear, child: const Text('清除凭据')),
                 ]),
               ),
             ],
-            for (final field in plain) ...[
+            for (final (i, field) in plain.indexed) ...[
               const SizedBox(height: 16),
-              _FieldRow(field: field),
+              _FieldRow(
+                field: field,
+                onClear: i == 0 && clearBesideField ? onClear : null,
+              ),
             ],
             if (advanced.isNotEmpty) ...[
               const SizedBox(height: 6),
@@ -497,8 +505,11 @@ class SiteCard extends StatelessWidget {
 
 /// A labelled setting and the button that stores it.
 class _FieldRow extends StatefulWidget {
-  const _FieldRow({required this.field});
+  const _FieldRow({required this.field, this.onClear});
   final SettingField field;
+
+  /// Shown after 保存 when this field is the one holding the credential.
+  final VoidCallback? onClear;
 
   @override
   State<_FieldRow> createState() => _FieldRowState();
@@ -570,6 +581,16 @@ class _FieldRowState extends State<_FieldRow> {
             child: const Text('保存'),
           ),
         ),
+        if (widget.onClear != null) ...[
+          const SizedBox(width: 8),
+          SizedBox(
+            height: kControlHeight,
+            child: OutlinedButton(
+              onPressed: widget.onClear,
+              child: const Text('清除凭据'),
+            ),
+          ),
+        ],
       ]),
       if (f.helpUrl != null)
         TextButton(
