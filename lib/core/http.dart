@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 
 import 'proxy.dart';
 
@@ -9,7 +12,7 @@ import 'proxy.dart';
 Dio buildDio({
   required String baseUrl,
   Map<String, String>? headers,
-  UrlProxy? proxy,
+  SiteProxy? proxy,
 }) {
   final dio = Dio(BaseOptions(
     baseUrl: baseUrl,
@@ -23,20 +26,31 @@ Dio buildDio({
     responseType: ResponseType.json,
     validateStatus: (s) => s != null && s < 500,
   ));
-  if (proxy != null) dio.interceptors.add(_ProxyInterceptor(proxy));
+  switch (proxy) {
+    case null:
+      break;
+    // The client itself is pointed at the proxy, exactly as HTTP_PROXY does
+    // it, so HTTPS goes through CONNECT and the site sees a normal request.
+    case ProxyTunnel(:final proxyString):
+      dio.httpClientAdapter = IOHttpClientAdapter(
+        createHttpClient: () => HttpClient()..findProxy = (_) => proxyString,
+      );
+    case ProxyRewrite p:
+      dio.interceptors.add(_RewriteInterceptor(p));
+  }
   return dio;
 }
 
-/// Hands the proxy the fully resolved address.
+/// Hands a rewriting proxy the fully resolved address.
 ///
 /// The rewrite has to happen here, at the last moment, rather than on the base
 /// URL: Dio only appends the query string when it builds `options.uri`, so
 /// rewriting any earlier would leave `?id=123` dangling outside the address
 /// the proxy was given. An absolute path bypasses `baseUrl`, and the query is
 /// cleared because it is now part of that path.
-class _ProxyInterceptor extends Interceptor {
-  _ProxyInterceptor(this.proxy);
-  final UrlProxy proxy;
+class _RewriteInterceptor extends Interceptor {
+  _RewriteInterceptor(this.proxy);
+  final ProxyRewrite proxy;
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {

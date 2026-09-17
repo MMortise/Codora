@@ -136,7 +136,10 @@ final siteImagesProvider = Provider.family<SiteImages, SiteId>((ref, site) {
   final images = ref.watch(sourceProvider(site)).images;
   final proxied =
       ref.watch(settingsProvider.select((s) => s.proxiesImages(site)));
-  return proxied ? images : images.unproxied;
+  // V2EX is the only site that can be proxied, and its descriptor exists for
+  // no other reason — a rewritten address with one kind of proxy, a loader
+  // with the other — so opting out means an ordinary request.
+  return proxied ? images : SiteImages.plain;
 });
 
 /// Every site in display order, including the ones switched off — the

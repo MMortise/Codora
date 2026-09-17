@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:html/parser.dart' as html_parser;
@@ -11,11 +13,11 @@ import '../core/util.dart';
 
 class V2exSource implements ForumSource {
   factory V2exSource({String token = '', String proxy = ''}) =>
-      V2exSource._(token, UrlProxy.parse(proxy));
+      V2exSource._(token, SiteProxy.parse(proxy));
 
   // The address is parsed once and handed to both the client that uses it and
   // the field that reports whether there is one.
-  V2exSource._(this.token, UrlProxy? proxy)
+  V2exSource._(this.token, SiteProxy? proxy)
       : _proxy = proxy,
         _dio = buildDio(
           baseUrl: 'https://www.v2ex.com',
@@ -25,7 +27,7 @@ class V2exSource implements ForumSource {
 
   final String token;
 
-  final UrlProxy? _proxy;
+  final SiteProxy? _proxy;
   final Dio _dio;
 
   @override
@@ -47,9 +49,37 @@ class V2exSource implements ForumSource {
   // too. Whether they actually take it is the reader's call, applied by
   // `siteImagesProvider` — it changes nothing about the feed, so it must not
   // rebuild this source.
+  //
+  // A rewriter only needs the address changed. A tunnel cannot work that way:
+  // pictures are drawn by `Image.network`, which has its own HTTP client and
+  // knows nothing about this one's proxy, so their bytes are fetched here
+  // instead.
   @override
-  late final SiteImages images =
-      _proxy == null ? SiteImages.plain : SiteImages(rewrite: _proxy.apply);
+  late final SiteImages images = switch (_proxy) {
+    null => SiteImages.plain,
+    ProxyRewrite p => SiteImages(rewrite: p.apply),
+    ProxyTunnel _ => SiteImages(loader: _fetchImage),
+  };
+
+  Future<Uint8List> _fetchImage(Uri url) async {
+    final Response<List<int>> res;
+    try {
+      res = await _dio.getUri<List<int>>(
+        url,
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: {'Accept': 'image/*,*/*'},
+        ),
+      );
+    } on DioException catch (e) {
+      throw Exception('图片没能通过代理加载：${e.message ?? e.type.name}');
+    }
+    final bytes = res.data;
+    if ((res.statusCode ?? 0) >= 400 || bytes == null || bytes.isEmpty) {
+      throw Exception('图片没能加载（HTTP ${res.statusCode}）');
+    }
+    return Uint8List.fromList(bytes);
+  }
   // How the site is being reached matters more here than what it is being
   // read as: without a reachable route there is nothing for a token to do.
   @override

@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/models.dart';
+import 'package:codora/core/http.dart';
 import 'package:codora/core/proxy.dart';
 import 'package:codora/core/settings.dart';
 import 'package:codora/features/providers.dart';
@@ -22,30 +23,69 @@ Uri v2ex(String path) => Uri.parse('https://www.v2ex.com$path');
 void main() {
   resetBootstrapState();
 
-  group('proxy address', () {
-    test('a blank or half-typed address is no proxy at all', () {
-      for (final raw in ['', '   ', 'p.example.com', 'ftp://p.example.com']) {
-        expect(UrlProxy.parse(raw), isNull, reason: '"$raw" is not usable yet');
+  group('reading the address', () {
+    test('a bare host and port is a tunnel, the way every tool means it', () {
+      // What Clash, curl -x and HTTP_PROXY all take.
+      expect(SiteProxy.parse('172.16.12.90:27006'),
+          const ProxyTunnel('172.16.12.90:27006'));
+      expect(SiteProxy.parse('http://127.0.0.1:7890'),
+          const ProxyTunnel('127.0.0.1:7890'));
+      expect(SiteProxy.parse('  127.0.0.1:7890  '),
+          const ProxyTunnel('127.0.0.1:7890'));
+    });
+
+    test('a placeholder makes it a rewriter instead', () {
+      expect(SiteProxy.parse('https://p.example.com/{url}'),
+          isA<ProxyRewrite>());
+      expect(SiteProxy.parse('https://p.example.com/?to={encoded_url}'),
+          isA<ProxyRewrite>());
+    });
+
+    test('an address that cannot be used is no proxy at all', () {
+      for (final raw in [
+        '',
+        '   ',
+        'p.example.com', // no port: nothing to tunnel to
+        'https://p.example.com/', // a rewriter has to say where the target goes
+        'socks5://127.0.0.1:1080', // would need a different client entirely
+      ]) {
+        expect(SiteProxy.parse(raw), isNull, reason: '"$raw" is not usable');
       }
     });
 
-    test('a prefix gets the target appended, trailing slash or not', () {
+    test('a tunnel really carries the request', () async {
+      // A proxy is asked for the target by absolute URI rather than by path,
+      // which is what tells this apart from a rewriter: the address is in the
+      // request line, not folded into it.
+      final proxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => proxy.close(force: true));
+      final asked = <String>[];
+      proxy.listen((req) async {
+        asked.add(req.uri.toString());
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode(const []));
+        await req.response.close();
+      });
+
+      final dio = buildDio(
+        baseUrl: 'http://www.v2ex.com',
+        proxy: SiteProxy.parse('127.0.0.1:${proxy.port}'),
+      );
+      await dio.get<dynamic>('/api/topics/hot.json');
+
+      expect(asked.single, 'http://www.v2ex.com/api/topics/hot.json');
+    });
+
+    test('a rewriter gets the target appended where it asked', () {
       const target = 'https://www.v2ex.com/api/topics/hot.json';
-      for (final prefix in ['https://p.example.com', 'https://p.example.com/']) {
-        expect(UrlProxy.parse(prefix)!.applyTo(target),
-            'https://p.example.com/$target');
-      }
-    });
-
-    test('{url} says where the target goes', () {
-      final proxy = UrlProxy.parse('https://p.example.com/proxy/{url}')!;
-      expect(proxy.applyTo('https://www.v2ex.com/t/1'),
-          'https://p.example.com/proxy/https://www.v2ex.com/t/1');
-    });
-
-    test('{encoded_url} escapes it, for a proxy that takes a parameter', () {
-      final proxy = UrlProxy.parse('https://p.example.com/?to={encoded_url}')!;
-      expect(proxy.applyTo('https://www.v2ex.com/?tab=all'),
+      expect(
+          (SiteProxy.parse('https://p.example.com/{url}')! as ProxyRewrite)
+              .applyTo(target),
+          'https://p.example.com/$target');
+      expect(
+          (SiteProxy.parse('https://p.example.com/?to={encoded_url}')!
+                  as ProxyRewrite)
+              .applyTo('https://www.v2ex.com/?tab=all'),
           'https://p.example.com/?to=https%3A%2F%2Fwww.v2ex.com%2F%3Ftab%3Dall');
     });
   });
@@ -61,27 +101,39 @@ void main() {
       expect(imagesWith(const AppSettings()).url(picture), picture);
     });
 
-    test('follow the proxy by default, whichever host they are on', () {
-      final images =
-          imagesWith(const AppSettings(v2exProxy: 'https://p.example.com'));
+    test('a rewriter changes their address, whichever host they are on', () {
+      final images = imagesWith(
+          const AppSettings(v2exProxy: 'https://p.example.com/{url}'));
       expect(images.url(picture).toString(),
           'https://p.example.com/https://i.imgur.com/abc.png');
       expect(images.url(v2ex('/avatar.png')).toString(),
           'https://p.example.com/https://www.v2ex.com/avatar.png');
     });
 
-    test('go direct when the reader has opted them out', () {
-      final images = imagesWith(const AppSettings(
-          v2exProxy: 'https://p.example.com', v2exProxyImages: false));
+    test('a tunnel fetches them instead of rewriting', () {
+      // Image.network has its own HTTP client and would ignore the tunnel, so
+      // the bytes have to come through the source's own client.
+      final images =
+          imagesWith(const AppSettings(v2exProxy: '127.0.0.1:7890'));
+      expect(images.rewrite, isNull);
+      expect(images.loader, isNotNull);
       expect(images.url(picture), picture);
-      expect(images.url(v2ex('/avatar.png')), v2ex('/avatar.png'));
+    });
+
+    test('go direct when the reader has opted them out', () {
+      for (final address in ['https://p.example.com/{url}', '127.0.0.1:7890']) {
+        final images = imagesWith(
+            AppSettings(v2exProxy: address, v2exProxyImages: false));
+        expect(images.url(picture), picture);
+        expect(images.loader, isNull, reason: '$address must not fetch them');
+      }
     });
 
     test('opting out does not disturb the feed', () {
       // The switch says nothing about the topic list, so it must not rebuild
       // the source — that would drop the feed into loading and refetch it.
       final c = containerWith(
-          const AppSettings(v2exProxy: 'https://p.example.com'));
+          const AppSettings(v2exProxy: 'https://p.example.com/{url}'));
       final before = c.read(sourceProvider(SiteId.v2ex));
       c.read(settingsProvider.notifier)
           .patch((s) => s.copyWith(v2exProxyImages: false));
@@ -108,17 +160,18 @@ void main() {
 
     tearDown(() => server.close(force: true));
 
-    String origin() => 'http://127.0.0.1:${server.port}';
+    /// A rewriting proxy pointed at the stub: the target goes in the path.
+    String rewriter() => 'http://127.0.0.1:${server.port}/{url}';
 
     test('an API call arrives at the proxy carrying the real address',
         () async {
-      final src = V2exSource(proxy: origin());
+      final src = V2exSource(proxy: rewriter());
       await src.fetchTopics(const Section(id: 'hot', title: '最热'));
       expect(asked.single, '/https://www.v2ex.com/api/topics/hot.json');
     });
 
     test('the query string travels inside the proxied address', () async {
-      final src = V2exSource(proxy: origin());
+      final src = V2exSource(proxy: rewriter());
       try {
         await src.fetchTopic('123');
       } catch (_) {
@@ -132,8 +185,8 @@ void main() {
     test('says so on the card, direct or proxied', () {
       expect(V2exSource().access.label, '直连');
       expect(V2exSource(token: 't').access.label, '直连 · Token');
-      expect(V2exSource(proxy: 'https://p.example.com').access.label, '经代理');
-      expect(V2exSource(proxy: 'https://p.example.com', token: 't').access.label,
+      expect(V2exSource(proxy: '127.0.0.1:7890').access.label, '经代理');
+      expect(V2exSource(proxy: '127.0.0.1:7890', token: 't').access.label,
           '经代理 · Token');
     });
 
@@ -162,7 +215,7 @@ void main() {
 
     test('with a proxy, it blames the proxy rather than V2EX', () {
       final err =
-          V2exSource(proxy: 'https://p.example.com').unreachableError(failure);
+          V2exSource(proxy: '127.0.0.1:7890').unreachableError(failure);
       expect(err.message, '代理没能连上 V2EX');
       expect(err.hint, contains('确认代理地址'));
       expect(err.hint, isNot(contains('填一个代理')),
