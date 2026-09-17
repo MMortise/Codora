@@ -1,6 +1,9 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../core/forum_source.dart';
 import '../core/http.dart';
 import '../core/models.dart';
+import '../core/settings.dart';
 import '../core/util.dart';
 import '../core/webview_fetcher.dart';
 
@@ -33,14 +36,15 @@ class LinuxDoSource implements ForumSource {
   @override
   Uri get homeUrl => Uri.parse('https://linux.do');
   @override
-  String get accessNote => '整站有 Cloudflare 人机验证。用内置浏览器过一次验证（可以顺便登录），'
-      '之后 Cookie 和该浏览器的 User-Agent 一起交给接口使用。';
+  String get accessNote => '整站有 Cloudflare 人机验证。用内置浏览器过一次验证，通过后可以直接登录。'
+      'passkey 和 Google 登录在内嵌浏览器里用不了（前者要站点授权，后者被 Google 拦），'
+      '这种情况在系统浏览器里登录，把 _t 这个 Cookie 复制到下面「手动填写」里。';
   @override
   SiteAccess get access {
-    if (!cookie.contains('cf_clearance=')) {
+    if (!cookieHeaderHas(cookie, 'cf_clearance')) {
       return const SiteAccess(AccessLevel.blocked, '待验证');
     }
-    return cookie.contains('_t=')
+    return cookieHeaderHas(cookie, kLinuxdoSignIn)
         ? const SiteAccess(AccessLevel.full, '已登录')
         : const SiteAccess(AccessLevel.limited, '已验证，未登录');
   }
@@ -66,6 +70,125 @@ class LinuxDoSource implements ForumSource {
                   .getBytes(_origin, url, userAgent: userAgent)
               : null,
         );
+
+  // Discourse describes the signed-in reader properly, and unlike V2EX it
+  // tracks what has been read — so the card's unread count here is the
+  // site's own rather than a mark this app keeps.
+  @override
+  Future<Member> Function()? get member =>
+      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _fetchMember : null;
+
+  /// Held to [kMemberDeadline] like every other site. This one needs it
+  /// most: the request goes through a WebView that can sit behind an expired
+  /// challenge indefinitely, and a card that spins forever says nothing.
+  Future<Member> _fetchMember() => _readMember().timeout(
+        kMemberDeadline,
+        onTimeout: () => throw AuthRequiredException(
+          id,
+          'linux.do 没有回应',
+          AuthRecovery.browser,
+          hint: '个人信息 ${kMemberDeadline.inSeconds} 秒没读回来，'
+              '多半是人机验证过期了。用内置浏览器重新过一次就好。',
+        ),
+      );
+
+  Future<Member> _readMember() async {
+    final session = await _get('/session/current.json');
+    final me = session['current_user'] as Map? ?? const {};
+    final username = '${me['username']}';
+
+    // The other two only add to what is already in hand. A card missing a
+    // join date is worth more than no card, so neither can sink the whole
+    // thing — a Discourse instance is free to lock either one down.
+    Map? profile;
+    List? notices;
+    await (
+      Future(() async {
+        try {
+          profile = (await _get('/u/$username.json'))['user'] as Map?;
+        } catch (_) {}
+      }),
+      Future(() async {
+        try {
+          notices = (await _get('/notifications.json',
+              query: {'filter': 'unread', 'limit': '5'}))['notifications'] as List?;
+        } catch (_) {}
+      }),
+    ).wait;
+
+    return parseMember(me, profile: profile, notices: notices);
+  }
+
+  /// Built apart from the requests so the shapes can be checked without one.
+  @visibleForTesting
+  static Member parseMember(Map me, {Map? profile, List? notices}) {
+    final username = '${me['username']}';
+    final rows = (notices ?? const []).cast<Map>();
+    return Member(
+      name: username,
+      avatarUrl: _avatarOf(me['avatar_template']?.toString(), size: 144),
+      url: '$_origin/u/$username',
+      // Discourse separates the handle from the display name, and keeps a
+      // short bio besides. Either is more use under a name than nothing.
+      tagline: _text(htmlToPreview(profile?['bio_excerpt']?.toString())) ??
+          _text(me['name']?.toString()),
+      number: asInt(me['id']),
+      joinedAt: fromIso(profile?['created_at']),
+      badge: _standing(me),
+      // Counted by the forum itself, so there is no mark to keep and no
+      // saturating at whatever one page happens to hold.
+      //
+      // `all_unread_notifications_count` is the one Discourse puts on its own
+      // bell. `unread_notifications` sounds like the number but is only the
+      // part of it that is not high priority — it read 0 here while two
+      // replies were waiting.
+      unread: asInt(me['all_unread_notifications_count']) ??
+          asInt(me['unread_notifications']),
+      notifications: [
+        for (final row in rows)
+          if (asInt(row['id']) case final id?)
+            Notice(
+              id: id,
+              text: _noticeText(row),
+              createdAt: fromIso(row['created_at']),
+            ),
+      ],
+      notificationsUrl: Uri.parse('$_origin/u/$username/notifications'),
+    );
+  }
+
+  /// What the forum says this reader counts as. Staff first — it outranks a
+  /// trust level and is the thing anyone would want to see.
+  static String? _standing(Map me) {
+    if (me['admin'] == true) return 'ADMIN';
+    if (me['moderator'] == true) return 'MOD';
+    final level = asInt(me['trust_level']);
+    return level == null ? null : 'LV$level';
+  }
+
+  /// One line for a notification: who, and what it was about.
+  static String _noticeText(Map row) {
+    final data = row['data'] as Map? ?? const {};
+    final who = _text(data['display_username']?.toString());
+    final what = _text(row['fancy_title']?.toString()) ??
+        _text(data['topic_title']?.toString()) ??
+        _text(data['badge_name']?.toString());
+    return [?who, ?what].join(' · ');
+  }
+
+  static String? _text(String? v) {
+    final s = v?.trim() ?? '';
+    return s.isEmpty ? null : s;
+  }
+
+  /// Discourse hands back a template with the size left out. One helper for
+  /// every size the app asks for, so a change in how avatars are served is
+  /// made once rather than in each place that wants a different one.
+  static String? _avatarOf(String? template, {int size = 96}) {
+    if (template == null || template.isEmpty) return null;
+    final sized = template.replaceAll('{size}', '$size');
+    return sized.startsWith('http') ? sized : '$_origin$sized';
+  }
 
   @override
   Future<List<Section>> sections() async {
@@ -252,21 +375,15 @@ class LinuxDoSource implements ForumSource {
 
   Author _author(Map u) => Author(
         name: '${u['username']}',
-        avatarUrl: _avatar(u['avatar_template']?.toString()),
+        avatarUrl: _avatarOf(u['avatar_template']?.toString()),
         url: 'https://linux.do/u/${u['username']}',
         tagline: u['name']?.toString(),
       );
 
   Author? _postAuthor(Map p) => p['username'] == null ? null : _author(p);
 
-  String? _avatar(String? template) {
-    if (template == null || template.isEmpty) return null;
-    final u = template.replaceAll('{size}', '96');
-    return u.startsWith('http') ? u : 'https://linux.do$u';
-  }
-
   void _requireCookie() {
-    if (!cookie.contains('cf_clearance=')) {
+    if (!cookieHeaderHas(cookie, 'cf_clearance')) {
       throw AuthRequiredException(
           id, '需要先完成 linux.do 的人机验证', AuthRecovery.browser);
     }

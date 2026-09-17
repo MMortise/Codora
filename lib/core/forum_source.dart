@@ -6,6 +6,15 @@ import 'models.dart';
 /// and the settings page are written against this interface only — adding a
 /// site means adding an implementation and registering it, with no changes to
 /// any widget.
+/// How long a profile card waits for a site before saying so.
+///
+/// The feed can spend the client's usual fifteen seconds connecting and
+/// thirty reading: someone who asked for a page will wait for it. A card that
+/// opened because the pointer paused cannot — long before those fire the
+/// reader has moved on, having watched a spinner and learnt nothing. Every
+/// site is held to the same number, so no card can be the one that hangs.
+const kMemberDeadline = Duration(seconds: 8);
+
 abstract class ForumSource {
   SiteId get id;
   String get name;
@@ -40,6 +49,18 @@ abstract class ForumSource {
   /// widgets restart a load when it changes, so a fresh object per call would
   /// refetch every avatar on every rebuild.
   SiteImages get images => SiteImages.plain;
+
+  /// How to read who the stored credentials sign the reader in as, or null
+  /// when this site cannot say.
+  ///
+  /// Whatever it answers, it answers within [kMemberDeadline] or explains
+  /// why it could not.
+  ///
+  /// A field rather than a method because the rail has to know whether to
+  /// offer a card before it goes and fetches one — and because the answer
+  /// turns on the credentials, not on the site: V2EX can only do this with a
+  /// token, and hands back null without one.
+  Future<Member> Function()? get member => null;
 
   /// If [uri] points at a topic on this site, return its id.
   String? topicIdFromUrl(Uri uri);

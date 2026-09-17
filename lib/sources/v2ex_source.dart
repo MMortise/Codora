@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -80,6 +81,99 @@ class V2exSource implements ForumSource {
     }
     return Uint8List.fromList(bytes);
   }
+  // The v2 API is the only part of V2EX that answers as a person, and a token
+  // is the only thing that opens it. Without one there is no profile to show,
+  // so the rail offers no card.
+  @override
+  Future<Member> Function()? get member => token.isEmpty ? null : _fetchMember;
+
+  /// How long the card waits before saying so. [kMemberDeadline] is where
+  /// the number is argued; it is named again here because the sentence below
+  /// quotes it.
+  static const memberDeadline = kMemberDeadline;
+
+  Future<Member> _fetchMember() async {
+    // Two independent reads, so the card waits for the slower of them rather
+    // than for both in turn.
+    //
+    // `Future.wait` rather than the record form: a record's `.wait` reports
+    // failure as a `ParallelWaitError`, which buries both the sentence the
+    // source wrote and the fact that it was an auth failure at all — an
+    // expired token would reach the card as `ParallelWaitError: …` with no
+    // way to offer settings. This one rethrows the first error as thrown.
+    final pair = await Future.wait([
+      _get('/api/v2/member', bearer: true),
+      _get('/api/v2/notifications', query: {'p': '1'}, bearer: true),
+    ]).timeout(memberDeadline, onTimeout: () => throw slowMemberError());
+    return parseMember(pair.first, pair.last);
+  }
+
+  /// Names whichever end went quiet, the same way [unreachableError] does for
+  /// the feed. Built apart from being thrown so both shapes can be checked.
+  @visibleForTesting
+  AuthRequiredException slowMemberError() {
+    final seconds = memberDeadline.inSeconds;
+    if (_proxy == null) {
+      return AuthRequiredException(
+        id,
+        'V2EX 没有回应',
+        AuthRecovery.settings,
+        hint: '个人信息 $seconds 秒没读回来。网络到 V2EX 这一段不通的话，'
+            '到设置里给它填一个代理地址。',
+      );
+    }
+    return AuthRequiredException(
+      id,
+      '代理没把个人信息带回来',
+      AuthRecovery.settings,
+      hint: '$seconds 秒没等到回应。代理本身可能连上了，但没有转发 V2EX 的接口。',
+    );
+  }
+
+  /// Built apart from the request so both payloads can be checked without a
+  /// network.
+  @visibleForTesting
+  static Member parseMember(dynamic profile, dynamic inbox) {
+    final m = (profile as Map)['result'] as Map? ?? const {};
+    final rows = ((inbox as Map)['result'] as List? ?? const []).cast<Map>();
+    return Member(
+      name: '${m['username']}',
+      avatarUrl: _abs(m['avatar_large']?.toString()) ??
+          _abs(m['avatar_normal']?.toString()),
+      url: m['url']?.toString(),
+      // V2EX has two of these: a one-liner shown beside the name and a longer
+      // paragraph below it. Either may be blank, and the card has room for
+      // one line, so whichever is filled in wins.
+      tagline: _text(m['tagline']) ?? _text(m['bio']),
+      number: asInt(m['id']),
+      joinedAt: fromUnixSeconds(m['created']),
+      badge: asInt(m['pro']) == 1 ? 'PRO' : null,
+      notifications: [
+        for (final n in rows)
+          if (asInt(n['id']) case final id?)
+            Notice(
+              id: id,
+              text: htmlToPreview(n['text']?.toString(), max: 70),
+              createdAt: fromUnixSeconds(n['created']),
+            ),
+      ],
+      // "Notifications 1-10/535" is the only place the API states how many
+      // there are; the rows themselves are one page of ten.
+      notificationTotal: asInt(RegExp(r'/(\d+)\s*$')
+          .firstMatch('${inbox['message'] ?? ''}')
+          ?.group(1)),
+      notificationsUrl: Uri.parse('https://www.v2ex.com/notifications'),
+      note: '金币、签到和收藏要网页登录才读得到，Token 读不到',
+    );
+  }
+
+  /// Trimmed, with a blank string read as absent — V2EX fills unset profile
+  /// fields with `""` rather than leaving them out.
+  static String? _text(Object? v) {
+    final s = v?.toString().trim() ?? '';
+    return s.isEmpty ? null : s;
+  }
+
   // How the site is being reached matters more here than what it is being
   // read as: without a reachable route there is nothing for a token to do.
   @override
@@ -205,6 +299,31 @@ class V2exSource implements ForumSource {
     }
     return PageResult(items: items);
   }
+
+  /// How long a hand-run test waits. Longer than the card's deadline: someone
+  /// who pressed a button is waiting for the answer, and a route that is only
+  /// slow is worth telling apart from one that is dead.
+  static const probeDeadline = Duration(seconds: 12);
+
+  /// Tries the smallest thing V2EX answers, and reports how long it took.
+  ///
+  /// Anonymous on purpose. The question is whether this route reaches V2EX at
+  /// all, and sending the token would let an expired one read as a broken
+  /// network. Throws with the reason when it does not get there.
+  Future<Duration> probe() async {
+    final clock = Stopwatch()..start();
+    try {
+      await _get('/api/topics/hot.json').timeout(probeDeadline);
+    } on TimeoutException {
+      throw Exception('超过 ${probeDeadline.inSeconds} 秒没有回应');
+    }
+    return clock.elapsed;
+  }
+
+  /// Drops the client and any connection it is holding. Only a source built
+  /// for a single [probe] needs this; the ones behind the feed live as long
+  /// as the settings they were built from.
+  void close() => _dio.close(force: true);
 
   /// Turns a request that never got an answer into something to act on.
   ///
@@ -476,7 +595,7 @@ class V2exSource implements ForumSource {
         tagline: m['tagline']?.toString(),
       );
 
-  String? _abs(String? u) {
+  static String? _abs(String? u) {
     if (u == null || u.isEmpty) return null;
     if (u.startsWith('//')) return 'https:$u';
     return u;

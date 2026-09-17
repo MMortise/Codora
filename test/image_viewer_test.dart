@@ -30,6 +30,51 @@ Future<void> pumpBodyWithImage(WidgetTester tester, String html) async {
 void main() {
   final linuxdo = File('test/fixtures/linuxdo_post.html').readAsStringSync();
 
+  group('leaving by the backdrop', () {
+    // The fitted layout only exists once a picture has decoded, which does
+    // not happen in a test — so the behaviour lives in its own widget and is
+    // checked here rather than through the viewer.
+    Future<void> pumpDismissable(WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(Brightness.dark),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const Scaffold(
+                  body: DismissOutside(
+                    child: SizedBox(width: 60, height: 60, child: Text('图')),
+                  ),
+                ),
+              )),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.text('图'), findsOneWidget);
+    }
+
+    testWidgets('a tap beside the picture leaves', (tester) async {
+      await pumpDismissable(tester);
+      // Well inside the area the viewer occupies, clear of the picture — the
+      // part that used to swallow every tap and go nowhere.
+      await tester.tapAt(const Offset(30, 300));
+      await tester.pumpAndSettle();
+      expect(find.text('图'), findsNothing);
+    });
+
+    testWidgets('a tap on the picture stays', (tester) async {
+      await pumpDismissable(tester);
+      await tester.tap(find.text('图'));
+      await tester.pumpAndSettle();
+      expect(find.text('图'), findsOneWidget,
+          reason: 'tapping what you opened should not close it');
+    });
+  });
+
   group('what the viewer opens', () {
     testWidgets('a lightbox image offers the original, not the thumbnail',
         (tester) async {

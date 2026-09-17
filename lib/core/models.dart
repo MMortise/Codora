@@ -33,6 +33,93 @@ class Author {
   final String? tagline;
 }
 
+/// The reader themselves on a site: who the stored credentials sign them in
+/// as. The rail shows this as a card; a site that cannot answer leaves
+/// [ForumSource.member] null and gets no card.
+class Member {
+  const Member({
+    required this.name,
+    this.avatarUrl,
+    this.url,
+    this.tagline,
+    this.number,
+    this.joinedAt,
+    this.badge,
+    this.notifications = const [],
+    this.unread,
+    this.notificationTotal,
+    this.notificationsUrl,
+    this.note,
+  });
+
+  final String name;
+  final String? avatarUrl;
+  final String? url;
+
+  /// The one line forums let people write under their own name.
+  final String? tagline;
+
+  /// Signup number, where the site hands one out — V2EX's member id is one.
+  final int? number;
+
+  final DateTime? joinedAt;
+
+  /// A short standing the site gives this reader — V2EX's PRO, a Discourse
+  /// trust level. Null where the site has nothing to say about it.
+  final String? badge;
+
+  /// The newest page of the reader's inbox, newest first.
+  final List<Notice> notifications;
+
+  /// How many the site itself says are unread.
+  ///
+  /// Null for a site that does not track it — V2EX hands back the whole
+  /// history either way — and the app then keeps its own mark instead. A real
+  /// count is always better than a remembered one, so this wins where it
+  /// exists.
+  final int? unread;
+
+  /// How many the site is holding altogether, when it says.
+  final int? notificationTotal;
+
+  /// Where the whole list lives, for a reader who wants to answer one.
+  final Uri? notificationsUrl;
+
+  /// What this card cannot show, and why. Sites use it for the parts of a
+  /// profile that a token does not reach.
+  final String? note;
+
+  /// The mark to store once the reader has opened the list — everything up to
+  /// here has been put in front of them.
+  int get newestNotification =>
+      notifications.fold(0, (a, n) => n.id > a ? n.id : a);
+
+  /// How many arrived after [seen].
+  ///
+  /// Only the newest page is fetched, so this saturates at its length: a
+  /// reader back from a fortnight away is told "10+", not the true number.
+  /// Only consulted for a site with no [unread] of its own.
+  int unreadSince(int seen) => notifications.where((n) => n.id > seen).length;
+
+  /// Whether [unreadSince] has run out of page to count.
+  bool saturated(int unread) =>
+      notifications.isNotEmpty && unread == notifications.length;
+}
+
+/// One line of a site's inbox.
+class Notice {
+  const Notice({required this.id, required this.text, this.createdAt});
+
+  /// Rises with time on every site that numbers these, which is what makes a
+  /// stored id usable as a high-water mark.
+  final int id;
+
+  /// Already flattened to one line of plain text.
+  final String text;
+
+  final DateTime? createdAt;
+}
+
 class TopicSummary {
   const TopicSummary({
     required this.site,

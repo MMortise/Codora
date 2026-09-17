@@ -25,6 +25,10 @@ class ReadLog {
 
   int get length => _keys.length;
 
+  /// Roughly what this takes up once stored: the keys plus the separator each
+  /// one needs. Close enough for a bar that is measuring gigabytes elsewhere.
+  int get storedBytes => _keys.fold(0, (n, key) => n + key.length + 1);
+
   /// Marks a post read. Returns a new log, or this one when nothing changed.
   ReadLog markRead(SiteId site, String id) {
     final key = keyFor(site, id);

@@ -50,6 +50,25 @@ Finder saveFor(String label) => find.descendant(
       matching: find.byType(FilledButton),
     );
 
+/// The 测试 button belonging to the proxy field, rather than any other
+/// outlined button on the card.
+Finder testProxy() => find.descendant(
+      of: find
+          .ancestor(
+              of: find.widgetWithText(TextField, '代理地址'),
+              matching: find.byType(Row))
+          .first,
+      matching: find.widgetWithText(OutlinedButton, '测试'),
+    );
+
+Future<void> typeProxy(WidgetTester tester, String address) async {
+  final field = find.widgetWithText(TextField, '代理地址');
+  await tester.ensureVisible(field);
+  await tester.pumpAndSettle();
+  await tester.enterText(field, address);
+  await tester.pumpAndSettle();
+}
+
 Future<void> tapAt(WidgetTester tester, Finder target) async {
   await tester.ensureVisible(target);
   await tester.pumpAndSettle();
@@ -77,8 +96,12 @@ void main() {
     expect(find.byType(SiteCard), findsNothing);
     expect(find.text('主题'), findsOneWidget);
     expect(find.text('跟随系统'), findsOneWidget);
+    expect(find.text('缓存'), findsOneWidget);
+    // One home for both: 阅读记录 is a slice of the cache, so its clear sits
+    // beside the one that takes everything rather than in a section of its own.
     expect(find.text('阅读记录'), findsOneWidget);
     expect(find.text('清除阅读记录'), findsOneWidget);
+    expect(find.text('清理缓存'), findsOneWidget);
 
     await tapTab(tester, '论坛');
     expect(find.byType(SiteCard), findsNWidgets(SiteId.values.length));
@@ -140,7 +163,7 @@ void main() {
     // A floating label straddles its field's top border, so part of it sits
     // above the field's own box. The disclosure clips its body to animate
     // open, and the label used to land on the wrong side of that edge.
-    final label = find.text('Cookie（需包含 cf_clearance）');
+    final label = find.text('Cookie（从别的浏览器带一个已登录的 _t 进来）');
     expect(label, findsOneWidget);
     final clip = find.descendant(
         of: find.byType(ExpansionTile), matching: find.byType(ClipRect));
@@ -180,9 +203,11 @@ void main() {
 
     // Linux.do earns its credential in a browser, so clearing stays with the
     // button that opens one — there is no field of its own to sit beside.
+    // Past the challenge and anonymous, that button offers the step still
+    // outstanding rather than the one already done.
     final verify = find.descendant(
         of: cardFor('Linux.do'),
-        matching: find.widgetWithText(FilledButton, '重新验证'));
+        matching: find.widgetWithText(FilledButton, '登录'));
     final ldClear = find.descendant(
         of: cardFor('Linux.do'),
         matching: find.widgetWithText(OutlinedButton, '清除凭据'));
@@ -237,5 +262,74 @@ void main() {
     final images = tester.widget<Switch>(imageSwitch());
     expect(images.onChanged, isNotNull);
     expect(images.value, isTrue);
+  });
+
+  testWidgets('every field is drawn exactly as tall as the buttons beside it',
+      (tester) async {
+    await openSettings(tester,
+        settings: const AppSettings(
+          v2exToken: 'abc',
+          v2exProxy: '127.0.0.1:7890',
+          juejinCookie: 'sessionid=x',
+        ));
+    // The disclosure holds a field too, and it was the one nobody looked at.
+    await tapAt(tester, find.text('手动填写').first);
+
+    final fields = find.byType(TextField);
+    expect(fields, findsWidgets);
+    for (var i = 0; i < fields.evaluate().length; i++) {
+      final field = fields.at(i);
+      final label = tester.widget<TextField>(field).decoration?.labelText;
+      final outline = tester.getRect(find.descendant(
+          of: field,
+          matching: find.byWidgetPredicate(
+              (w) => w.runtimeType.toString() == '_BorderContainer')));
+      final row = find.ancestor(of: field, matching: find.byType(Row)).first;
+      final save =
+          find.descendant(of: row, matching: find.byType(FilledButton));
+      if (save.evaluate().isEmpty) continue;
+
+      // Not the widget box — the edge someone can see. A single-line field
+      // matches the button; a multi-line one is allowed to be taller, never
+      // shorter.
+      expect(outline.height, greaterThanOrEqualTo(kControlHeight),
+          reason: '$label is drawn shorter than its 保存 button');
+      expect(tester.getRect(save.first).height, kControlHeight);
+      expect(outline.top, tester.getRect(save.first).top,
+          reason: '$label does not start level with its 保存 button');
+    }
+  });
+
+  group('测试', () {
+    testWidgets('sits beside the address it tries', (tester) async {
+      await openSettings(tester);
+      expect(testProxy(), findsOneWidget);
+      // Only the proxy has one — nothing else here can be tried by asking.
+      expect(find.widgetWithText(OutlinedButton, '测试'), findsOneWidget);
+    });
+
+    testWidgets('refuses an address it cannot read, without asking the network',
+        (tester) async {
+      await openSettings(tester);
+      await typeProxy(tester, 'not a proxy at all');
+      await tapAt(tester, testProxy());
+
+      // No spinner, no request: an unreadable address is not a route, and
+      // testing one would quietly report on the direct connection instead.
+      expect(find.textContaining('读不出来'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('clears a previous verdict when asked again', (tester) async {
+      await openSettings(tester);
+      await typeProxy(tester, 'nonsense');
+      await tapAt(tester, testProxy());
+      expect(find.textContaining('读不出来'), findsOneWidget);
+
+      await typeProxy(tester, 'still nonsense');
+      await tapAt(tester, testProxy());
+      expect(find.textContaining('读不出来'), findsOneWidget,
+          reason: 'one verdict on screen, not two');
+    });
   });
 }
