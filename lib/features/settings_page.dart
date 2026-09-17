@@ -225,6 +225,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 }
 
 /// The two halves of the page, as one segmented control.
+///
+/// The selection is a single pill that slides between the tabs rather than a
+/// fill that jumps from one to the other, so the eye follows it across instead
+/// of having to find it again.
 class _Tabs extends StatelessWidget {
   const _Tabs({required this.current, required this.onSelect});
 
@@ -234,6 +238,9 @@ class _Tabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
+    const tabs = SettingsTab.values;
+    final index = tabs.indexOf(current);
+
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -243,18 +250,95 @@ class _Tabs extends StatelessWidget {
           borderRadius: BorderRadius.circular(Radii.block + 4),
           border: Border.all(color: p.line),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          for (final tab in SettingsTab.values)
-            _Choice(
-              label: tab.label,
-              selected: tab == current,
-              onTap: () => onSelect(tab),
-              idle: Colors.transparent,
-              height: kControlHeight - 6,
-              padding: 26,
-              fontSize: 13.5,
+        // The row sizes the strip; the pill is laid over it at a fraction of
+        // that width, which keeps the two in step whatever the labels say.
+        child: IntrinsicWidth(
+          child: Stack(children: [
+            Positioned.fill(
+              child: AnimatedAlign(
+                duration: Motion.swap,
+                curve: Motion.curve,
+                alignment: Alignment(
+                    tabs.length == 1 ? 0 : -1 + 2 * index / (tabs.length - 1),
+                    0),
+                child: FractionallySizedBox(
+                  widthFactor: 1 / tabs.length,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: p.accent,
+                      borderRadius: BorderRadius.circular(Radii.block),
+                    ),
+                  ),
+                ),
+              ),
             ),
-        ]),
+            Row(children: [
+              for (final tab in tabs)
+                Expanded(
+                  child: _TabLabel(
+                    label: tab.label,
+                    selected: tab == current,
+                    onTap: () => onSelect(tab),
+                  ),
+                ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// One tab's label. The fill behind it belongs to the sliding pill, so this
+/// paints only its own hover state and lets its colour cross-fade.
+class _TabLabel extends StatefulWidget {
+  const _TabLabel({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_TabLabel> createState() => _TabLabelState();
+}
+
+class _TabLabelState extends State<_TabLabel> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: Motion.quick,
+          curve: Motion.curve,
+          height: kControlHeight - 6,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 26),
+          decoration: BoxDecoration(
+            // Hovering the selected tab would only paint over its own pill.
+            color: !widget.selected && _hover ? p.raised : Colors.transparent,
+            borderRadius: BorderRadius.circular(Radii.block),
+          ),
+          child: AnimatedDefaultTextStyle(
+            duration: Motion.swap,
+            curve: Motion.curve,
+            style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: widget.selected ? p.accentInk : p.inkMuted),
+            child: Text(widget.label),
+          ),
+        ),
       ),
     );
   }
@@ -637,62 +721,39 @@ class _ToggleRow extends StatelessWidget {
   }
 }
 
-/// The one pill toggle on this page: the tab strip at the top and the theme
-/// picker under 常规 are the same control at two sizes.
-class _Choice extends StatefulWidget {
+/// The theme picker's pill toggle. Its fill is its own, unlike a tab, whose
+/// fill is the strip's sliding pill.
+class _Choice extends StatelessWidget {
   const _Choice({
     required this.label,
     required this.selected,
     required this.onTap,
-    this.idle,
-    this.height = kControlHeight,
-    this.padding = 18,
-    this.fontSize = 13,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  /// Unselected fill. Defaults to the raised surface; a pill sitting inside a
-  /// track of its own passes transparent so the track shows through.
-  final Color? idle;
-
-  final double height;
-  final double padding;
-  final double fontSize;
-
-  @override
-  State<_Choice> createState() => _ChoiceState();
-}
-
-class _ChoiceState extends State<_Choice> {
-  bool _hover = false;
-
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    final selected = widget.selected;
-    final idle = widget.idle ?? p.raised;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: widget.onTap,
+        onTap: onTap,
         child: AnimatedContainer(
           duration: Motion.quick,
           curve: Motion.curve,
-          height: widget.height,
+          height: kControlHeight,
           alignment: Alignment.center,
-          padding: EdgeInsets.symmetric(horizontal: widget.padding),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
           decoration: BoxDecoration(
-            color: selected ? p.accent : (_hover ? p.raised : idle),
+            color: selected ? p.accent : p.raised,
             borderRadius: BorderRadius.circular(Radii.block),
           ),
-          child: Text(widget.label,
+          child: Text(label,
               style: TextStyle(
-                  fontSize: widget.fontSize,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: selected ? p.accentInk : p.inkMuted)),
         ),

@@ -1,6 +1,7 @@
 // Settings is two tabs: the forums, and everything that is about the app
 // rather than a site. Each forum card carries the switch that puts it on the
 // rail, and V2EX alone carries the proxy its traffic can be sent through.
+import 'package:codora/app_theme.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/settings.dart';
 import 'package:codora/features/providers.dart';
@@ -81,6 +82,31 @@ void main() {
 
     await tapTab(tester, '论坛');
     expect(find.byType(SiteCard), findsNWidgets(SiteId.values.length));
+  });
+
+  testWidgets('the tab pill slides across instead of jumping', (tester) async {
+    await openSettings(tester);
+    // The pill is the one thing in the strip painted in the accent colour.
+    Rect pill() => tester.getRect(find
+        .descendant(
+            of: find.byType(FractionallySizedBox),
+            matching: find.byType(Container))
+        .first);
+
+    final atForums = pill();
+    await tester.tap(find.text('常规'));
+    await tester.pump(); // starts the slide
+    await tester.pump(Motion.swap ~/ 2);
+
+    final midway = pill();
+    expect(midway.left, greaterThan(atForums.left),
+        reason: 'half way through the switch the pill has started moving');
+
+    await tester.pumpAndSettle();
+    expect(pill().left, greaterThan(midway.left),
+        reason: 'and it keeps going to the second tab');
+    expect(pill().width, closeTo(atForums.width, 0.5),
+        reason: 'the pill covers one tab either way');
   });
 
   testWidgets('each site has a switch, reflecting whether it is shown',

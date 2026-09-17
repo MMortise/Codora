@@ -40,6 +40,27 @@ void main() {
     });
   }
 
+  for (final brightness in Brightness.values) {
+    test('both buttons are filled blocks in ${brightness.name}', () {
+      // They always measured the same height, but a bare outline on the
+      // panel's own colour reads as a smaller control than a solid one, so
+      // the secondary button carries a fill of its own.
+      final theme = buildTheme(brightness);
+      final p = brightness == Brightness.dark ? Palette.dark : Palette.light;
+
+      for (final (name, style) in [
+        ('primary', theme.filledButtonTheme.style),
+        ('secondary', theme.outlinedButtonTheme.style),
+      ]) {
+        final fill = style?.backgroundColor?.resolve({});
+        expect(fill, isNotNull,
+            reason: 'the $name button has no fill to read as a block');
+        expect(fill, isNot(p.panel),
+            reason: 'the $name button would vanish into the card it sits on');
+      }
+    });
+  }
+
   testWidgets('a field scaled up grows instead of being squashed',
       (tester) async {
     await tester.pumpWidget(MaterialApp(

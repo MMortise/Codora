@@ -254,6 +254,11 @@ ThemeData buildTheme(Brightness brightness) {
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         foregroundColor: p.ink,
+        // Filled rather than bare. Its box is already the same height as the
+        // primary button beside it, but a hairline on the panel's own colour
+        // reads as a smaller control than a solid block of accent — the two
+        // only look level once both are blocks.
+        backgroundColor: p.raised,
         side: BorderSide(color: p.line),
         textStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13.5),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.block)),
