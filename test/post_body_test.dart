@@ -75,6 +75,63 @@ void main() {
       final image = tester.widget<PostImage>(find.byType(PostImage));
       expect(image.url.toString(), 'https://example.com/a/b.png');
     });
+
+    // Trimmed from what linux.do actually serves for a reply that quotes
+    // someone: the face, then the name, on one line above the quoted text.
+    const quote = '<aside class="quote no-group" data-username="lubiancao">\n'
+        '<div class="title">\n<div class="quote-controls"></div>\n'
+        '<img alt="" width="24" height="24" class="avatar" '
+        'src="https://cdn.ldstatic.com/user_avatar/linux.do/lubiancao/48/1_2.png">'
+        ' lubiancao:</div>\n'
+        '<blockquote>\n<p>被引用的那句话</p>\n</blockquote>\n</aside>\n'
+        '<p>我的回复</p>';
+
+    /// Whether a picture was put into the run of text rather than onto a line
+    /// of its own. An inline one is a span inside the paragraph; a block one
+    /// is a widget beside it.
+    bool inLine(WidgetTester tester, Finder image) => find
+        .ancestor(of: image, matching: find.byType(RichText))
+        .evaluate()
+        .isNotEmpty;
+
+    testWidgets('a quoted name keeps its face on the same line',
+        (tester) async {
+      await pumpBody(tester, quote, BodyFormat.html);
+
+      final avatar = find.byType(PostImage);
+      expect(avatar, findsOneWidget);
+      expect(inLine(tester, avatar), isTrue,
+          reason: 'as a block it sat above the name it belongs to');
+      expect(tester.widget<PostImage>(avatar).width, 24,
+          reason: 'the size the page asked for, not the 48px file it was sent');
+      expect(find.textContaining('lubiancao:', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('被引用的那句话', findRichText: true),
+          findsOneWidget);
+    });
+
+    testWidgets('an emoji stays in the sentence it was typed in',
+        (tester) async {
+      await pumpBody(
+        tester,
+        '<p>说得好 <img class="emoji" width="20" height="20" '
+        'src="/images/emoji/smile.png" alt="smile"></p>',
+        BodyFormat.html,
+      );
+      expect(inLine(tester, find.byType(PostImage)), isTrue);
+      expect(tester.widget<PostImage>(find.byType(PostImage)).width, 20,
+          reason: 'a 72px file drawn at the size of the line');
+    });
+
+    testWidgets('a picture in a post still gets a line of its own',
+        (tester) async {
+      await pumpBody(
+          tester, '<p>看图</p><p><img src="/photo.png" alt="photo"></p>',
+          BodyFormat.html);
+      expect(inLine(tester, find.byType(PostImage)), isFalse);
+      expect(tester.widget<PostImage>(find.byType(PostImage)).width, isNull,
+          reason: 'it keeps its own size, up to the width of the pane');
+    });
   });
 
   group('Markdown bodies', () {

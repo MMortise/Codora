@@ -16,11 +16,20 @@ class PostImage extends StatelessWidget {
     this.images = SiteImages.plain,
     this.rounded = true,
     this.fullUrl,
+    this.width,
+    this.height,
   });
 
   final Uri url;
   final String? alt;
   final SiteImages images;
+
+  /// What the page asked for, where it says. A picture that sits in the run
+  /// of text is usually served larger than it is meant to be drawn — a 24px
+  /// avatar comes as a 48px file — and left to its own size it would tower
+  /// over the line it belongs to.
+  final double? width;
+  final double? height;
 
   /// Inline emoji keep their own shape; clipping a 20px glyph would cut it.
   /// They are also not worth opening full screen.
@@ -35,6 +44,8 @@ class PostImage extends StatelessWidget {
     final image = SiteImage(
       url: url,
       images: images,
+      width: width,
+      height: height,
       fallback: BrokenImage(alt: alt),
     );
     if (!rounded) return image;

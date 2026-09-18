@@ -144,6 +144,23 @@ class _HtmlBody extends StatelessWidget {
         if (src == null || src.isEmpty) return null;
         final uri = Uri.tryParse(src);
         if (uri == null) return null;
+        // A picture that belongs in the run of text has to say so, or the
+        // renderer puts it on a line of its own: the little face Discourse
+        // shows in front of the name it is quoting ended up above that name
+        // instead of beside it, at twice the size besides.
+        if (_inlineImage(el)) {
+          return InlineCustomWidget(
+            alignment: PlaceholderAlignment.middle,
+            child: PostImage(
+              url: parent._resolve(uri),
+              alt: el.attributes['alt'],
+              images: parent.images,
+              rounded: false,
+              width: _asked(el, 'width') ?? parent.fontSize,
+              height: _asked(el, 'height') ?? parent.fontSize,
+            ),
+          );
+        }
         return PostImage(
           url: parent._resolve(uri),
           // Discourse shows a resized copy and links the original from the
@@ -151,11 +168,24 @@ class _HtmlBody extends StatelessWidget {
           fullUrl: parent._lightboxTarget(el),
           alt: el.attributes['alt'],
           images: parent.images,
-          rounded: !el.className.contains('emoji'),
         );
       },
     );
   }
+}
+
+/// The classes Discourse gives a picture that lives inside a sentence: the
+/// face in front of a quoted name, an emoji, the favicon on a link preview.
+/// None of them is worth a line, and none of them is worth opening.
+const _inlineImageClasses = {'avatar', 'emoji', 'site-icon'};
+
+bool _inlineImage(dom.Element el) =>
+    el.classes.any(_inlineImageClasses.contains);
+
+/// The size the page asked for, when it says.
+double? _asked(dom.Element el, String attribute) {
+  final value = double.tryParse(el.attributes[attribute] ?? '');
+  return value == null || value <= 0 ? null : value;
 }
 
 class _MarkdownBody extends StatelessWidget {
