@@ -13,6 +13,7 @@ import 'package:codora/app_theme.dart';
 import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/widgets/post_body.dart';
+import 'package:codora/widgets/post_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -104,6 +105,8 @@ void main() {
     });
   });
 
+  // The ceiling is a ceiling: something that already fits is left alone, and
+  // a wide picture is still bound by the pane rather than by the new number.
   testWidgets('a small picture is not blown up', (tester) async {
     await pumpPost(
       tester,
@@ -116,16 +119,32 @@ void main() {
     expect(rect.height, closeTo(80, 2));
   });
 
-  testWidgets('a tall picture is bounded by width', (tester) async {
-    await pumpPost(
-      tester,
-      '<p><img src="https://cdn3.ldstatic.com/tall.png" alt="tall"></p>',
-      BodyFormat.html,
-      'tall_image.png',
-    );
-    final rect = imageRect(tester);
-    expect(rect.width, lessThanOrEqualTo(paneWidth));
-    expect(rect.height / rect.width, closeTo(3000 / 750, 0.05));
+  group('a tall picture', () {
+    // 750×3000, which is roughly a phone screenshot. Held to the pane width
+    // alone it came out 2240px tall: a reply went missing between the top of
+    // its picture and the bottom of it.
+    const html = '<p><img src="https://cdn3.ldstatic.com/tall.png" alt="tall"></p>';
+
+    testWidgets('is held to a ceiling, not only to the width', (tester) async {
+      await pumpPost(tester, html, BodyFormat.html, 'tall_image.png');
+      final rect = imageRect(tester);
+      expect(rect.height, lessThanOrEqualTo(kPostImageMaxHeight));
+      expect(rect.width, lessThan(paneWidth),
+          reason: 'the height is what binds now, so the width comes in with it');
+    });
+
+    testWidgets('and is drawn whole rather than squeezed', (tester) async {
+      await pumpPost(tester, html, BodyFormat.html, 'tall_image.png');
+      final rect = imageRect(tester);
+      expect(rect.height / rect.width, closeTo(3000 / 750, 0.05),
+          reason: 'nothing is cropped or stretched; it is simply smaller');
+    });
+
+    testWidgets('its corners come down with it', (tester) async {
+      await pumpPost(tester, html, BodyFormat.html, 'tall_image.png');
+      final clip = tester.getRect(find.byType(ClipRRect).first);
+      expect(clip.height, closeTo(imageRect(tester).height, 2));
+    });
   });
 
   testWidgets('markdown pictures are bounded the same way', (tester) async {
