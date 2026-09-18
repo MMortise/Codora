@@ -107,4 +107,68 @@ void main() {
       expect(image.url.toString(), 'https://example.com/a/b.png');
     });
   });
+
+  // Both renderers hand a preformatted block to a horizontal scroll view,
+  // which suits a listing of code and nothing else people put in one. A V2EX
+  // post written entirely inside `<pre>` came out as one line per paragraph,
+  // reachable only by dragging sideways inside a pane that scrolls the other
+  // way.
+  group('preformatted blocks', () {
+    const long = '一段很长的正文，作者把整篇帖子都写在了一个块里面，所以这一行会一直'
+        '延伸下去，直到读者只能横着拖动才能把它读完，而这恰恰是一个阅读器最不该'
+        '要求读者做的事情。';
+
+    /// A pane narrow enough that the line above cannot possibly fit on one.
+    void narrow(WidgetTester tester) {
+      tester.view.physicalSize = const Size(400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+    }
+
+    bool scrollsSideways(WidgetTester tester) => tester
+        .widgetList<SingleChildScrollView>(find.byType(SingleChildScrollView))
+        .any((s) => s.scrollDirection == Axis.horizontal);
+
+    testWidgets('a long line wraps rather than running off the side',
+        (tester) async {
+      narrow(tester);
+      await pumpBody(tester, '<pre><code>$long</code></pre>', BodyFormat.html);
+
+      final box = tester.getSize(find.text(long));
+      expect(box.width, lessThanOrEqualTo(400));
+      expect(box.height, greaterThan(40), reason: 'which takes several lines');
+      expect(scrollsSideways(tester), isFalse);
+    });
+
+    testWidgets('the line breaks the author wrote are kept', (tester) async {
+      // Wrapping by telling the renderer `white-space: normal` would have
+      // thrown these away, and they are the one part that cannot be guessed
+      // back — they carry the numbered lists these posts are full of.
+      narrow(tester);
+      await pumpBody(
+          tester, '<pre><code>\n1. 第一条\n2. 第二条\n</code></pre>', BodyFormat.html);
+
+      expect(find.text('1. 第一条\n2. 第二条'), findsOneWidget,
+          reason: 'without the blank lines the markup puts around a block');
+    });
+
+    testWidgets('a markdown code block wraps the same way', (tester) async {
+      narrow(tester);
+      await pumpBody(tester, '```\n$long\n```\n', BodyFormat.markdown);
+
+      expect(tester.getSize(find.text(long)).width, lessThanOrEqualTo(400));
+      expect(scrollsSideways(tester), isFalse);
+    });
+
+    testWidgets('and still sits on the raised block it had', (tester) async {
+      narrow(tester);
+      await pumpBody(tester, '<pre><code>print(1)</code></pre>', BodyFormat.html);
+
+      final box = tester.widget<Container>(find.ancestor(
+          of: find.text('print(1)'), matching: find.byType(Container)).first);
+      final decoration = box.decoration! as BoxDecoration;
+      expect(decoration.color, Palette.dark.raised);
+      expect((decoration.borderRadius! as BorderRadius).topLeft.x, Radii.image);
+    });
+  });
 }
