@@ -50,6 +50,8 @@ class Member {
     this.notificationTotal,
     this.notificationsUrl,
     this.note,
+    this.stats = const [],
+    this.progressUrl,
   });
 
   final String name;
@@ -89,6 +91,13 @@ class Member {
   /// profile that a token does not reach.
   final String? note;
 
+  /// The counters a site promotes on, in the order worth reading.
+  final List<MemberStat> stats;
+
+  /// Where the site itself explains what is still missing before the next
+  /// standing, when the app can only show the counters and not the bar.
+  final Uri? progressUrl;
+
   /// The mark to store once the reader has opened the list — everything up to
   /// here has been put in front of them.
   int get newestNotification =>
@@ -104,6 +113,25 @@ class Member {
   /// Whether [unreadSince] has run out of page to count.
   bool saturated(int unread) =>
       notifications.isNotEmpty && unread == notifications.length;
+}
+
+/// One number a site counts toward what a reader is allowed to do.
+///
+/// The value arrives ready to read — hours for a span of time, 2.1k for a
+/// count — because what a number means is the source's business and not the
+/// card's.
+class MemberStat {
+  const MemberStat(this.label, this.value, {this.target, this.met = true});
+
+  final String label;
+  final String value;
+
+  /// What it has to reach, where the site fixes a number. Null when there is
+  /// none, or when only the site can work out what it is.
+  final String? target;
+
+  /// False only where there is a [target] and it has not been reached.
+  final bool met;
 }
 
 /// One line of a site's inbox.

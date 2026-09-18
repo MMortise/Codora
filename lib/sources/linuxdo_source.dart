@@ -104,6 +104,7 @@ class LinuxDoSource implements ForumSource {
     // thing — a Discourse instance is free to lock either one down.
     Map? profile;
     List? notices;
+    Map? summary;
     await (
       Future(() async {
         try {
@@ -116,14 +117,22 @@ class LinuxDoSource implements ForumSource {
               query: {'filter': 'unread', 'limit': '5'}))['notifications'] as List?;
         } catch (_) {}
       }),
+      Future(() async {
+        try {
+          summary = (await _get('/u/$username/summary.json'))['user_summary']
+              as Map?;
+        } catch (_) {}
+      }),
     ).wait;
 
-    return parseMember(me, profile: profile, notices: notices);
+    return parseMember(me,
+        profile: profile, notices: notices, summary: summary);
   }
 
   /// Built apart from the requests so the shapes can be checked without one.
   @visibleForTesting
-  static Member parseMember(Map me, {Map? profile, List? notices}) {
+  static Member parseMember(Map me,
+      {Map? profile, List? notices, Map? summary}) {
     final username = '${me['username']}';
     final rows = (notices ?? const []).cast<Map>();
     return Member(
@@ -156,7 +165,88 @@ class LinuxDoSource implements ForumSource {
             ),
       ],
       notificationsUrl: Uri.parse('$_origin/u/$username/notifications'),
+      stats: _progress(me, summary),
+      // Where the rest of it is. The counters below are the right ones, but
+      // the bar for level 3 moves with the site and is only worked out on
+      // its side.
+      progressUrl: summary == null ? null : _connect,
+      note: _levelNote(me, summary),
     );
+  }
+
+  /// linux.do's own page for what is still missing before the next level. It
+  /// signs in separately and reads the site from the inside, which is how it
+  /// can show the hundred-day windows this app cannot.
+  static final _connect = Uri.parse('https://connect.linux.do/');
+
+  /// What Discourse asks for before the next level, where the number is fixed
+  /// and counted over the whole of a reader's time.
+  ///
+  /// Level 3 is deliberately absent: every one of its requirements is
+  /// measured over the last hundred days, and two of them against how busy
+  /// the site itself has been — a quarter of the topics it saw, a quarter of
+  /// the posts. Nothing a member can read says either of those, so guessing a
+  /// bar here would be worse than showing none. These are also Discourse's
+  /// own defaults; a site may have raised them, and nothing public says.
+  static const _wanted = <int, Map<String, int>>{
+    1: {'topics_entered': 5, 'posts_read_count': 30, 'time_read': 600},
+    2: {
+      'days_visited': 15,
+      'topics_entered': 20,
+      'posts_read_count': 100,
+      'time_read': 3600,
+      'likes_given': 1,
+      'likes_received': 1,
+    },
+  };
+
+  /// The counters a level is decided on, ready to read.
+  static List<MemberStat> _progress(Map me, Map? summary) {
+    if (summary == null) return const [];
+    final wants = _wanted[(asInt(me['trust_level']) ?? 0) + 1] ?? const {};
+
+    MemberStat? counter(String label, String key, {bool isTime = false}) {
+      final now = asInt(summary[key]);
+      if (now == null) return null;
+      String say(int n) => isTime ? _spell(n) : compactCount(n);
+      final want = wants[key];
+      return MemberStat(
+        label,
+        say(now),
+        target: want == null ? null : say(want),
+        met: want == null || now >= want,
+      );
+    }
+
+    return [
+      for (final counted in [
+        counter('访问天数', 'days_visited'),
+        counter('浏览话题', 'topics_entered'),
+        counter('已读帖子', 'posts_read_count'),
+        counter('阅读时长', 'time_read', isTime: true),
+        counter('送出的赞', 'likes_given'),
+        counter('收到的赞', 'likes_received'),
+      ])
+        ?counted,
+    ];
+  }
+
+  /// Said once, under the counters, where a bar cannot be drawn for them.
+  static String? _levelNote(Map me, Map? summary) {
+    if (summary == null) return null;
+    final level = asInt(me['trust_level']) ?? 0;
+    return level >= 2
+        ? '这些是总计。3 级的门槛看最近 100 天，还跟全站活跃度挂钩，只有站点自己算得出'
+        : null;
+  }
+
+  /// A span of time as someone would say it.
+  static String _spell(int seconds) {
+    if (seconds < 3600) return '${(seconds / 60).round()} 分钟';
+    final hours = seconds / 3600;
+    return hours < 10
+        ? '${hours.toStringAsFixed(1)} 小时'
+        : '${hours.round()} 小时';
   }
 
   /// What the forum says this reader counts as. Staff first — it outranks a

@@ -132,6 +132,10 @@ class _Profile extends ConsumerWidget {
         ],
         const _Rule(),
         _Inbox(site: site, member: member),
+        if (member.stats.isNotEmpty) ...[
+          const _Rule(),
+          _Progress(member: member),
+        ],
         if (member.note case final note?) ...[
           const _Rule(),
           Padding(
@@ -222,6 +226,98 @@ class _Inbox extends ConsumerWidget {
         ],
       ]),
     );
+  }
+}
+
+/// What the site counts toward what the reader is allowed to do.
+///
+/// The numbers are the ones a level is decided on. Where the bar is a fixed
+/// number the site counts over all time — which is what the first two levels
+/// are — it is shown beside them; where it moves with the site, it is not
+/// invented, and the row opens the page that can work it out.
+class _Progress extends StatelessWidget {
+  const _Progress({required this.member});
+
+  final Member member;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final stats = member.stats;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _Row(
+        onTap: member.progressUrl == null
+            ? null
+            : () => launchUrl(member.progressUrl!),
+        child: Row(children: [
+          Icon(Icons.trending_up_rounded, size: 13, color: p.inkFaint),
+          const SizedBox(width: 6),
+          Text('等级进度',
+              style: TextStyle(fontSize: 12, height: 1.2, color: p.inkMuted)),
+          const Spacer(),
+          if (member.badge case final badge?)
+            Text(badge,
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600, color: p.ink)),
+          if (member.progressUrl != null) ...[
+            const SizedBox(width: 5),
+            Icon(Icons.north_east_rounded, size: 12, color: p.inkFaint),
+          ],
+        ]),
+      ),
+      Padding(
+        padding: _inset.add(const EdgeInsets.only(top: 4)),
+        // Two to a row: the card is as wide as a notification line, and six
+        // of these down the side of it would be taller than everything above
+        // them put together.
+        child: Column(children: [
+          for (var i = 0; i < stats.length; i += 2)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Row(children: [
+                Expanded(child: _Stat(stats[i])),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: i + 1 < stats.length
+                      ? _Stat(stats[i + 1])
+                      : const SizedBox.shrink(),
+                ),
+              ]),
+            ),
+        ]),
+      ),
+    ]);
+  }
+}
+
+/// One counter: what it is, where it stands, and what it has to reach.
+class _Stat extends StatelessWidget {
+  const _Stat(this.stat);
+
+  final MemberStat stat;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Row(children: [
+      Flexible(
+        child: Text(stat.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, height: 1.2, color: p.inkFaint)),
+      ),
+      const SizedBox(width: 6),
+      Text(stat.value,
+          style: TextStyle(
+              fontSize: 11.5,
+              height: 1.2,
+              fontWeight: FontWeight.w600,
+              // Short of the bar is the one thing here worth a colour.
+              color: stat.met ? p.ink : p.badge)),
+      if (stat.target case final target?)
+        Text(' / $target',
+            style: TextStyle(fontSize: 10.5, height: 1.2, color: p.inkFaint)),
+    ]);
   }
 }
 

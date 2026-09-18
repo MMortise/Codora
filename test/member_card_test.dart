@@ -2,6 +2,7 @@
 // v2 API hands back for the reader, and the fact that it has no read state of
 // its own — the inbox comes back whole every time, so "unread" is a mark this
 // app keeps and the card has to be honest about not having one yet.
+import 'package:codora/app_theme.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/settings.dart';
 import 'package:codora/features/member_card.dart';
@@ -203,6 +204,62 @@ void main() {
       final edge = left(find.text('勤勤恳恳小开发。'));
       expect(left(find.textContaining('提到了你')), edge);
       expect(left(find.textContaining('金币')), edge);
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('lays the level counters out two to a row', (tester) async {
+      // Six of these down one side of a card this narrow would be taller than
+      // everything above them put together.
+      final c = await show(
+        tester,
+        Member(
+          name: 'someone',
+          badge: 'LV2',
+          stats: const [
+            MemberStat('访问天数', '9', target: '15', met: false),
+            MemberStat('浏览话题', '2.1k'),
+            MemberStat('已读帖子', '1.3w'),
+          ],
+          progressUrl: Uri.parse('https://connect.linux.do/'),
+        ),
+      );
+
+      expect(find.text('等级进度'), findsOneWidget);
+      expect(find.text('LV2'), findsWidgets);
+      expect(tester.getTopLeft(find.text('访问天数')).dy,
+          tester.getTopLeft(find.text('浏览话题')).dy,
+          reason: 'the first two share a line');
+      expect(tester.getTopLeft(find.text('已读帖子')).dy,
+          greaterThan(tester.getTopLeft(find.text('访问天数')).dy),
+          reason: 'and the third starts the next one');
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('marks the counter that is short of the bar', (tester) async {
+      final c = await show(
+        tester,
+        const Member(
+          name: 'someone',
+          stats: [
+            MemberStat('访问天数', '9', target: '15', met: false),
+            MemberStat('送出的赞', '40'),
+          ],
+        ),
+      );
+
+      expect(find.text(' / 15'), findsOneWidget,
+          reason: 'a fixed bar is worth showing');
+      expect(tester.widget<Text>(find.text('9')).style?.color,
+          Palette.dark.badge, reason: 'short of it is the thing to notice');
+      expect(tester.widget<Text>(find.text('40')).style?.color,
+          Palette.dark.ink);
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('a site with nothing to say about levels gets no block',
+        (tester) async {
+      final c = await show(tester, parse([30]));
+      expect(find.text('等级进度'), findsNothing);
       await disposeApp(tester, c);
     });
 

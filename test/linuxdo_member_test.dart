@@ -4,6 +4,7 @@
 //
 // The payloads below are trimmed from what linux.do actually answered, so the
 // field names and shapes are the real ones rather than what the docs suggest.
+import 'package:codora/core/models.dart';
 import 'package:codora/core/settings.dart';
 import 'package:codora/sources/linuxdo_source.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,6 +40,23 @@ const _notices = [
     'data': {'topic_title': '大家都是用的什么移动套餐？', 'display_username': '回帖的人'},
   },
 ];
+
+/// What `/u/{name}/summary.json` hands back, trimmed to the counters a level
+/// is decided on.
+const _summary = {
+  'likes_given': 12,
+  'likes_received': 45,
+  'topics_entered': 2103,
+  'posts_read_count': 12840,
+  'days_visited': 88,
+  'time_read': 129600,
+  'topic_count': 3,
+  'post_count': 40,
+  'bookmark_count': 7,
+};
+
+MemberStat statNamed(Member m, String label) =>
+    m.stats.firstWhere((s) => s.label == label);
 
 void main() {
   LinuxDoSource sourceWith(String cookie) =>
@@ -130,6 +148,79 @@ void main() {
     });
   });
 
+  // connect.linux.do reports on these, and it can do so properly: it signs in
+  // on its own side and reads the hundred-day windows a member's session
+  // never sees. What is reachable from here is the counters themselves.
+  group('how far along the reader is', () {
+    test('the six counters a level is decided on', () {
+      final m = LinuxDoSource.parseMember(_me, summary: _summary);
+      expect(m.stats.map((s) => s.label), [
+        '访问天数',
+        '浏览话题',
+        '已读帖子',
+        '阅读时长',
+        '送出的赞',
+        '收到的赞',
+      ]);
+      expect(statNamed(m, '访问天数').value, '88');
+      expect(statNamed(m, '浏览话题').value, '2.1k');
+      expect(statNamed(m, '收到的赞').value, '45');
+    });
+
+    test('a span of time is read as a span of time', () {
+      expect(statNamed(LinuxDoSource.parseMember(_me, summary: _summary),
+              '阅读时长').value,
+          '36 小时');
+      expect(
+          statNamed(
+                  LinuxDoSource.parseMember(_me,
+                      summary: {..._summary, 'time_read': 600}),
+                  '阅读时长')
+              .value,
+          '10 分钟');
+      expect(
+          statNamed(
+                  LinuxDoSource.parseMember(_me,
+                      summary: {..._summary, 'time_read': 5400}),
+                  '阅读时长')
+              .value,
+          '1.5 小时');
+    });
+
+    test('below 2 级 the bar is shown, because it is a fixed number',
+        (() {
+      // Discourse decides the first two levels on counters kept over the
+      // whole of a reader's time, so these are the real thresholds.
+      final m = LinuxDoSource.parseMember(
+          {..._me, 'trust_level': 1},
+          summary: {..._summary, 'days_visited': 9, 'likes_given': 0});
+
+      expect(statNamed(m, '访问天数').target, '15');
+      expect(statNamed(m, '访问天数').met, isFalse, reason: '9 of 15');
+      expect(statNamed(m, '送出的赞').target, '1');
+      expect(statNamed(m, '送出的赞').met, isFalse);
+      expect(statNamed(m, '浏览话题').met, isTrue, reason: '2103 of 20');
+    })); 
+
+    test('at 2 级 no bar is invented', () {
+      // Every requirement for 3 级 is measured over the last hundred days,
+      // and two of them against how busy the site itself has been. Nothing a
+      // member can read says either, so a number here would be made up.
+      final m = LinuxDoSource.parseMember(_me, summary: _summary);
+      expect(m.stats.every((s) => s.target == null), isTrue);
+      expect(m.stats.every((s) => s.met), isTrue);
+      expect(m.note, contains('100 天'));
+      expect(m.progressUrl.toString(), 'https://connect.linux.do/');
+    });
+
+    test('and a forum that will not hand the summary over shows none', () {
+      final m = LinuxDoSource.parseMember(_me);
+      expect(m.stats, isEmpty);
+      expect(m.progressUrl, isNull);
+      expect(m.note, isNull, reason: 'nothing to explain without the numbers');
+    });
+  });
+
   group('when the extras are refused', () {
     test('the card is still built from the session alone', () {
       // Either of the other two requests may be locked down on a given
@@ -142,8 +233,8 @@ void main() {
     });
 
     test('and says nothing it cannot reach', () {
-      // V2EX carries a note about what a token cannot see. Here there is
-      // nothing missing, so there is nothing to explain.
+      // V2EX carries a note about what a token cannot see. With no summary
+      // there is nothing to qualify either, so there is nothing to explain.
       expect(LinuxDoSource.parseMember(_me).note, isNull);
     });
   });
