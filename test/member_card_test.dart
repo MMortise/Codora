@@ -2,6 +2,8 @@
 // v2 API hands back for the reader, and the fact that it has no read state of
 // its own — the inbox comes back whole every time, so "unread" is a mark this
 // app keeps and the card has to be honest about not having one yet.
+import 'dart:async';
+
 import 'package:codora/app_theme.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/settings.dart';
@@ -149,14 +151,14 @@ void main() {
   });
 
   group('the card', () {
-    Future<ProviderContainer> show(WidgetTester tester, Member member,
+    /// Standing in for the site rather than the provider, so the card is
+    /// tested through the same notifier the app runs.
+    Future<ProviderContainer> showSource(
+        WidgetTester tester, FakeSource source,
         {AppSettings settings = const AppSettings()}) async {
       AppSettings.bootstrap = settings;
-      // Standing in for the site rather than the provider, so the card is
-      // tested through the same notifier the app runs.
       final container = ProviderContainer(overrides: [
-        sourceProvider(SiteId.v2ex)
-            .overrideWithValue(FakeSource(() async => member)),
+        sourceProvider(SiteId.v2ex).overrideWithValue(source),
       ]);
       addTearDown(container.dispose);
       await tester.pumpWidget(UncontrolledProviderScope(
@@ -168,6 +170,10 @@ void main() {
       await tester.pumpAndSettle();
       return container;
     }
+
+    Future<ProviderContainer> show(WidgetTester tester, Member member,
+            {AppSettings settings = const AppSettings()}) =>
+        showSource(tester, FakeSource(() async => member), settings: settings);
 
     testWidgets('says 消息 and the total before the list has been opened',
         (tester) async {
@@ -260,6 +266,60 @@ void main() {
         (tester) async {
       final c = await show(tester, parse([30]));
       expect(find.text('等级进度'), findsNothing);
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('a card that could not be read offers another go',
+        (tester) async {
+      // The one place the button is really wanted: there is nothing else on
+      // this card, and a pointer that leaves and comes back only waits out
+      // the minute before it tries again by itself.
+      var attempt = 0;
+      final site = FakeSource(() async {
+        if (++attempt == 1) throw Exception('linux.do 没有回应');
+        return parse([30]);
+      });
+      final c = await showSource(tester, site);
+      expect(find.text('linux.do 没有回应'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.refresh_rounded));
+      await tester.pumpAndSettle();
+
+      expect(site.calls, 2, reason: 'it asked again');
+      expect(find.text('wxVIP'), findsOneWidget);
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('and so does one that was read perfectly well', (tester) async {
+      final site = FakeSource(() async => parse([30]));
+      final c = await showSource(tester, site);
+
+      await tester.tap(find.byIcon(Icons.refresh_rounded));
+      await tester.pumpAndSettle();
+      expect(site.calls, 2);
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('while it is reading, the corner says so rather than emptying',
+        (tester) async {
+      final again = Completer<Member>();
+      var attempt = 0;
+      final site = FakeSource(() async {
+        if (++attempt == 1) return parse([30]);
+        return again.future;
+      });
+      final c = await showSource(tester, site);
+
+      await tester.tap(find.byIcon(Icons.refresh_rounded));
+      await tester.pump();
+      expect(find.byIcon(Icons.refresh_rounded), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('wxVIP'), findsOneWidget,
+          reason: 'the profile it already had stays up');
+
+      again.complete(parse([40, 30]));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
       await disposeApp(tester, c);
     });
 

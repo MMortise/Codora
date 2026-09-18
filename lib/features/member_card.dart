@@ -52,8 +52,13 @@ class MemberCard extends ConsumerWidget {
             radius: Radii.card,
             padding: const EdgeInsets.fromLTRB(6, 13, 6, 12),
             child: switch ((profile, member.error)) {
-              (final Member found, _) => _Profile(site: site, member: found),
-              (_, final Object failure?) => _Failed(errorText(failure)),
+              (final Member found, _) =>
+                _Profile(site: site, member: found, busy: member.isLoading),
+              (_, final Object failure?) => _Failed(
+                  errorText(failure),
+                  site: site,
+                  busy: member.isLoading,
+                ),
               _ => const _Loading(),
             },
           ),
@@ -64,10 +69,15 @@ class MemberCard extends ConsumerWidget {
 }
 
 class _Profile extends ConsumerWidget {
-  const _Profile({required this.site, required this.member});
+  const _Profile({
+    required this.site,
+    required this.member,
+    this.busy = false,
+  });
 
   final SiteId site;
   final Member member;
+  final bool busy;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -79,7 +89,9 @@ class _Profile extends ConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Padding(
-          padding: _inset,
+          // Tighter on the right than the sections below, so the action in
+          // the corner sits where a corner is rather than short of it.
+          padding: _inset.copyWith(right: 2),
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             UserAvatar(
               url: member.avatarUrl,
@@ -117,6 +129,8 @@ class _Profile extends ConsumerWidget {
                 ],
               ),
             ),
+            const SizedBox(width: 4),
+            _Refresh(site: site, busy: busy),
           ]),
         ),
         if (member.tagline case final tagline?) ...[
@@ -398,25 +412,73 @@ class _Loading extends StatelessWidget {
 }
 
 class _Failed extends StatelessWidget {
-  const _Failed(this.message);
+  const _Failed(this.message, {required this.site, this.busy = false});
 
   final String message;
+  final SiteId site;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
     return Padding(
-      padding: _inset,
+      padding: _inset.copyWith(right: 2),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(Icons.error_outline_rounded, size: 14, color: p.rose),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(message,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, height: 1.35, color: p.inkMuted)),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Text(message,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    TextStyle(fontSize: 12, height: 1.35, color: p.inkMuted)),
+          ),
         ),
+        const SizedBox(width: 4),
+        // The one place this is really wanted: a card that could not be read
+        // has nothing else to offer, and a pointer that leaves and comes back
+        // only waits out the minute before it tries again by itself.
+        _Refresh(site: site, busy: busy),
       ]),
+    );
+  }
+}
+
+/// Reads the profile again, from the same corner whatever the card is showing.
+class _Refresh extends ConsumerWidget {
+  const _Refresh({required this.site, required this.busy});
+
+  final SiteId site;
+
+  /// A read already on its way. The button keeps its place and turns into
+  /// what it is doing, rather than disappearing and moving the row.
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.palette;
+    if (busy) {
+      return SizedBox(
+        width: 26,
+        height: 26,
+        child: Center(
+          child: SizedBox(
+            width: 13,
+            height: 13,
+            child:
+                CircularProgressIndicator(strokeWidth: 2, color: p.inkFaint),
+          ),
+        ),
+      );
+    }
+    return QuietIconButton(
+      icon: Icons.refresh_rounded,
+      tooltip: '重新读取',
+      size: 14,
+      box: 26,
+      onPressed: () => ref.invalidate(memberProvider(site)),
     );
   }
 }

@@ -79,11 +79,17 @@ class QuietIconButton extends StatefulWidget {
     required this.tooltip,
     required this.onPressed,
     this.size = 17,
+    this.box = 32,
   });
   final IconData icon;
   final String tooltip;
   final VoidCallback? onPressed;
   final double size;
+
+  /// The square it reaches over. The top bar has room for the full one; a
+  /// card is narrower, and an action in its corner should not take a third of
+  /// the way across it.
+  final double box;
 
   @override
   State<QuietIconButton> createState() => _QuietIconButtonState();
@@ -109,8 +115,8 @@ class _QuietIconButtonState extends State<QuietIconButton> {
           child: AnimatedContainer(
             duration: Motion.quick,
             curve: Motion.curve,
-            width: 32,
-            height: 32,
+            width: widget.box,
+            height: widget.box,
             decoration: BoxDecoration(
               color: _hover && enabled ? p.raised : Colors.transparent,
               borderRadius: BorderRadius.circular(Radii.block),
