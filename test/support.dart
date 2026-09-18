@@ -76,7 +76,7 @@ Future<void> disposeApp(WidgetTester tester, ProviderContainer container) async 
 /// without a network is to stand in for the site itself — which also keeps
 /// the real provider, timers and all, in the picture.
 class FakeSource implements ForumSource {
-  FakeSource(this.answer, {this.id = SiteId.v2ex, this.onReply});
+  FakeSource(this.answer, {this.id = SiteId.v2ex, this.onReply, this.onLike});
 
   /// Null for a site that cannot say who the reader is.
   final Future<Member> Function()? answer;
@@ -84,6 +84,9 @@ class FakeSource implements ForumSource {
   /// Null for a site that cannot be written to, which is what decides
   /// whether the reading pane offers a box at all.
   final Future<Reply> Function(String topicId, String text)? onReply;
+
+  /// Null for a site with no likes to give.
+  final Future<LikeState> Function(String postId, {required bool like})? onLike;
 
   int calls = 0;
 
@@ -97,6 +100,9 @@ class FakeSource implements ForumSource {
 
   @override
   Future<Reply> Function(String, String)? get reply => onReply;
+
+  @override
+  Future<LikeState> Function(String, {required bool like})? get like => onLike;
 
   @override
   final SiteId id;

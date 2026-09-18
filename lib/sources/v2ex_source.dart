@@ -92,6 +92,11 @@ class V2exSource implements ForumSource {
   @override
   Future<Reply> Function(String, String)? get reply => null;
 
+  // V2EX has no likes to give: it counts thanks, and sending one needs a web
+  // session and the form's own token.
+  @override
+  Future<LikeState> Function(String, {required bool like})? get like => null;
+
   /// How long the card waits before saying so. [kMemberDeadline] is where
   /// the number is argued; it is named again here because the sentence below
   /// quotes it.

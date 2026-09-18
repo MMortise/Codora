@@ -44,6 +44,9 @@ class JuejinSource implements ForumSource {
   Future<Reply> Function(String, String)? get reply => null;
 
   @override
+  Future<LikeState> Function(String, {required bool like})? get like => null;
+
+  @override
   SiteAccess get access => cookie.isEmpty
       ? const SiteAccess(AccessLevel.open, '匿名浏览')
       : const SiteAccess(AccessLevel.full, '已登录');

@@ -352,6 +352,7 @@ class LinuxDoSource implements ForumSource {
     final stream = _TopicStream.from(res);
     _streams[topicId] = stream;
     final first = stream.loadedPosts.isEmpty ? const {} : stream.loadedPosts.first;
+    final opening = parseLike(first);
     final details = res['details'] as Map? ?? const {};
     final creator = details['created_by'] as Map?;
     return TopicDetail(
@@ -364,8 +365,14 @@ class LinuxDoSource implements ForumSource {
       sectionLabel: _categoryNames[asInt(res['category_id'])],
       replyCount: (asInt(res['posts_count']) ?? 1) - 1,
       viewCount: asInt(res['views']),
-      likeCount: asInt(res['like_count']),
+      // The topic's own like count is the sum over every post in it; what a
+      // reader can act on is the opening post, so its own stands here.
+      likeCount: opening.count,
       createdAt: fromIso(res['created_at']),
+      postId: asInt(first['id'])?.toString(),
+      liked: opening.liked,
+      canLike: opening.canLike,
+      canUnlike: opening.canUnlike,
     );
   }
 
@@ -406,9 +413,51 @@ class LinuxDoSource implements ForumSource {
   Future<Reply> Function(String topicId, String text)? get reply =>
       cookieHeaderHas(cookie, kLinuxdoSignIn) ? _reply : null;
 
+  // Discourse counts a like as an action on a post, and taking one back as
+  // the removal of that action. Both go out over the session the reading
+  // already uses.
+  @override
+  Future<LikeState> Function(String postId, {required bool like})? get like =>
+      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _like : null;
+
+  Future<LikeState> _like(String postId, {required bool like}) async {
+    _requireCookie();
+    final id = asInt(postId) ?? postId;
+    final answer = like
+        ? await _write('POST', '/post_actions',
+            body: {'id': id, 'post_action_type_id': _likeAction})
+        : await _write(
+            'DELETE', '/post_actions/$id?post_action_type_id=$_likeAction');
+    return parseLike(answer);
+  }
+
+  /// Discourse numbers what can be done to a post; 2 is the like.
+  static const _likeAction = 2;
+
+  /// Where a post stands on likes, out of the summary every post carries.
+  ///
+  /// No line at all means the site said nothing, and nothing is then offered:
+  /// Discourse leaves the line out when the count is zero *and* this reader
+  /// may not act — their own post. Where they may, it says so, which is also
+  /// what comes back after the last like is taken away.
+  @visibleForTesting
+  static LikeState parseLike(Map post) {
+    for (final action
+        in (post['actions_summary'] as List? ?? const []).cast<Map>()) {
+      if (asInt(action['id']) != _likeAction) continue;
+      return LikeState(
+        count: asInt(action['count']) ?? 0,
+        liked: action['acted'] == true,
+        canLike: action['can_act'] == true,
+        canUnlike: action['can_undo'] == true,
+      );
+    }
+    return const LikeState(count: 0);
+  }
+
   Future<Reply> _reply(String topicId, String text) async {
     _requireCookie();
-    final answer = await _post('/posts', {
+    final answer = await _write('POST', '/posts', body: {
       'raw': text,
       'topic_id': asInt(topicId) ?? topicId,
     });
@@ -428,15 +477,17 @@ class LinuxDoSource implements ForumSource {
   /// session, and it is read here rather than kept: it belongs to the session
   /// cookie, and that can be replaced under the app at any point by a sign-in
   /// in the visible browser.
-  Future<Map> _post(String path, Map<String, Object?> body) async {
+  Future<Map> _write(String method, String path,
+      {Map<String, Object?>? body}) async {
     final csrf = '${(await _get('/session/csrf.json'))['csrf'] ?? ''}';
     if (csrf.isEmpty) {
       throw Exception('linux.do 没有给出提交凭证，重新登录一次再试');
     }
     try {
-      final answer = await WebViewFetcher.instance.postJson(
+      final answer = await WebViewFetcher.instance.sendJson(
         _origin,
         path,
+        method: method,
         body: body,
         headers: {'X-CSRF-Token': csrf},
         userAgent: userAgent,
@@ -532,19 +583,17 @@ class LinuxDoSource implements ForumSource {
   static Reply parsePost(Map post) => _mapPost(post);
 
   static Reply _mapPost(Map p) {
-    int? likes = asInt(p['like_count']);
-    if (likes == null) {
-      for (final a in (p['actions_summary'] as List? ?? const []).cast<Map>()) {
-        if (asInt(a['id']) == 2) likes = asInt(a['count']);
-      }
-    }
+    final like = parseLike(p);
     return Reply(
       id: '${p['id']}',
       content: '${p['cooked'] ?? ''}',
       author: _postAuthor(p),
       createdAt: fromIso(p['created_at']),
       floor: asInt(p['post_number']),
-      likeCount: likes,
+      likeCount: like.count,
+      liked: like.liked,
+      canLike: like.canLike,
+      canUnlike: like.canUnlike,
     );
   }
 

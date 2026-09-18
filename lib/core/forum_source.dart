@@ -76,6 +76,15 @@ abstract class ForumSource {
   /// scrolled through, with their own words the part not loaded.
   Future<Reply> Function(String topicId, String text)? get reply => null;
 
+  /// How to like a post, or null where the site has no such thing — or the
+  /// stored credentials do not sign the reader in.
+  ///
+  /// A field for the same reason as [reply]. It answers with where the post
+  /// stands afterwards rather than with nothing, because the count it comes
+  /// back with is the site's, not one the app worked out by adding one.
+  Future<LikeState> Function(String postId, {required bool like})? get like =>
+      null;
+
   /// If [uri] points at a topic on this site, return its id.
   String? topicIdFromUrl(Uri uri);
 }

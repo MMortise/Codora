@@ -115,6 +115,35 @@ class Member {
       notifications.isNotEmpty && unread == notifications.length;
 }
 
+/// Where a post stands on likes, from the reader's side.
+///
+/// A site that says nothing about any of this leaves the flags false, and the
+/// post is drawn with its count and nothing to press.
+class LikeState {
+  const LikeState({
+    required this.count,
+    this.liked = false,
+    this.canLike = false,
+    this.canUnlike = false,
+  });
+
+  final int count;
+
+  /// Whether this reader is one of them.
+  final bool liked;
+
+  /// Whether they may add one. False for their own post, and on a site that
+  /// does not let them.
+  final bool canLike;
+
+  /// Whether the one they added can still be taken back. Discourse closes
+  /// that window a few minutes after the like.
+  final bool canUnlike;
+
+  /// Whether pressing it would do anything.
+  bool get open => liked ? canUnlike : canLike;
+}
+
 /// One number a site counts toward what a reader is allowed to do.
 ///
 /// The value arrives ready to read — hours for a span of time, 2.1k for a
@@ -197,6 +226,10 @@ class TopicDetail {
     this.viewCount,
     this.likeCount,
     this.createdAt,
+    this.postId,
+    this.liked = false,
+    this.canLike = false,
+    this.canUnlike = false,
   });
   final SiteId site;
   final String id;
@@ -210,6 +243,16 @@ class TopicDetail {
   final int? viewCount;
   final int? likeCount;
   final DateTime? createdAt;
+
+  /// The post the topic opens with, where a site numbers it apart from the
+  /// topic. Liking is done to a post, not to a thread.
+  final String? postId;
+
+  /// As on a [Reply]: whether this reader has liked the opening post, and
+  /// what they may do about it.
+  final bool liked;
+  final bool canLike;
+  final bool canUnlike;
 }
 
 /// Who a reply is answering.
@@ -237,6 +280,9 @@ class Reply {
     this.createdAt,
     this.floor,
     this.likeCount,
+    this.liked = false,
+    this.canLike = false,
+    this.canUnlike = false,
     this.quote,
     this.children = const [],
   });
@@ -250,7 +296,30 @@ class Reply {
   final DateTime? createdAt;
   final int? floor;
   final int? likeCount;
+
+  /// Whether this reader has liked it, and what they may do about that.
+  /// See [LikeState], which is what a site answers with when they do.
+  final bool liked;
+  final bool canLike;
+  final bool canUnlike;
+
   final List<Reply> children;
+
+  /// The same reply, as it stands after a like or an unlike.
+  Reply withLike(LikeState like) => Reply(
+        id: id,
+        content: content,
+        format: format,
+        author: author,
+        createdAt: createdAt,
+        floor: floor,
+        likeCount: like.count,
+        liked: like.liked,
+        canLike: like.canLike,
+        canUnlike: like.canUnlike,
+        quote: quote,
+        children: children,
+      );
 }
 
 class PageResult<T> {

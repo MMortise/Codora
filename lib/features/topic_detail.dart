@@ -10,6 +10,7 @@ import '../core/util.dart';
 import '../widgets/avatar.dart';
 import '../widgets/chrome.dart';
 import '../widgets/error_view.dart';
+import '../widgets/like_button.dart';
 import '../widgets/post_body.dart';
 import '../widgets/relative_time.dart';
 import '../widgets/swap.dart';
@@ -194,6 +195,24 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     ref.invalidate(repliesProvider(widget.topic));
   }
 
+  /// Likes a post, or takes the like back, and tells the thread about it.
+  ///
+  /// The opening post is not in the thread's list — it comes from its own
+  /// provider — so only a reply is written back; the button there keeps what
+  /// the forum answered until the topic is loaded again.
+  Future<LikeState> _like(
+    Future<LikeState> Function(String, {required bool like}) act,
+    String postId,
+    bool wanted, {
+    String? replyId,
+  }) async {
+    final state = await act(postId, like: wanted);
+    if (replyId != null) {
+      ref.read(repliesProvider(widget.topic).notifier).replaceLike(replyId, state);
+    }
+    return state;
+  }
+
   /// Sends a reply and puts it at the end of the thread.
   ///
   /// Anything thrown here is the forum explaining why it refused, and the box
@@ -283,7 +302,17 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(30, 26, 30, 0),
                   sliver: SliverToBoxAdapter(
-                      child: PostHeader(detail: d, images: _images)),
+                    child: PostHeader(
+                      detail: d,
+                      images: _images,
+                      // Only a site that says who may like what, and only a
+                      // post it numbers apart from its thread.
+                      onLike: source.like == null || d.postId == null
+                          ? null
+                          : (wanted) =>
+                              _like(source.like!, d.postId!, wanted),
+                    ),
+                  ),
                 ),
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(30, 0, 30, 20),
@@ -318,7 +347,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                     ]),
                   ),
                 ),
-                ..._replySlivers(replies, source.homeUrl),
+                ..._replySlivers(replies, source),
                 const SliverToBoxAdapter(child: SizedBox(height: 36)),
               ],
             ),
@@ -339,7 +368,10 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     return n == 0 ? '还没有回复' : '$n 条回复';
   }
 
-  List<Widget> _replySlivers(AsyncValue<RepliesState> replies, Uri baseUrl) {
+  List<Widget> _replySlivers(
+      AsyncValue<RepliesState> replies, ForumSource source) {
+    final baseUrl = source.homeUrl;
+    final act = source.like;
     return replies.when(
       loading: () => const [
         SliverToBoxAdapter(
@@ -368,6 +400,10 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
             baseUrl: baseUrl,
             onTopicLink: _handleLink,
             images: _images,
+            onLike: act == null
+                ? null
+                : (wanted) =>
+                    _like(act, r.all[i].id, wanted, replyId: r.all[i].id),
           ),
         ),
         SliverToBoxAdapter(
@@ -401,10 +437,18 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
 
 /// Title, author and stats above a post body.
 class PostHeader extends StatelessWidget {
-  const PostHeader(
-      {super.key, required this.detail, this.images = SiteImages.plain});
+  const PostHeader({
+    super.key,
+    required this.detail,
+    this.images = SiteImages.plain,
+    this.onLike,
+  });
   final TopicDetail detail;
   final SiteImages images;
+
+  /// Null where the site has no likes to give, or the reader is not signed
+  /// in to give one.
+  final Future<LikeState> Function(bool like)? onLike;
 
   @override
   Widget build(BuildContext context) {
@@ -423,7 +467,18 @@ class PostHeader extends StatelessWidget {
           if (detail.sectionLabel != null) Pill(label: detail.sectionLabel!),
           if (detail.viewCount != null)
             Pill(label: '${compactCount(detail.viewCount)} 阅读'),
-          if (detail.likeCount != null)
+          if (onLike case final act?)
+            LikeButton(
+              pill: true,
+              state: LikeState(
+                count: detail.likeCount ?? 0,
+                liked: detail.liked,
+                canLike: detail.canLike,
+                canUnlike: detail.canUnlike,
+              ),
+              onLike: act,
+            )
+          else if (detail.likeCount != null)
             Pill(label: '${compactCount(detail.likeCount)} 赞', tone: p.cream),
         ];
         return Wrap(
@@ -496,6 +551,7 @@ class ReplyTile extends StatelessWidget {
     this.images = SiteImages.plain,
     this.nested = false,
     this.first = false,
+    this.onLike,
   });
 
   final Reply reply;
@@ -503,6 +559,10 @@ class ReplyTile extends StatelessWidget {
   final bool Function(Uri) onTopicLink;
   final SiteImages images;
   final bool nested;
+
+  /// Null where the site has no likes to give, or the reader is not signed
+  /// in to give one.
+  final Future<LikeState> Function(bool like)? onLike;
 
   /// The first reply in the thread, which the count's own rule already sits
   /// above — a border here would draw a second line right under it.
@@ -537,7 +597,18 @@ class ReplyTile extends StatelessWidget {
             RelativeTime(reply.createdAt),
           ]),
         ),
-        if (reply.likeCount != null && reply.likeCount! > 0) ...[
+        if (onLike case final act?) ...[
+          const SizedBox(width: 10),
+          LikeButton(
+            state: LikeState(
+              count: reply.likeCount ?? 0,
+              liked: reply.liked,
+              canLike: reply.canLike,
+              canUnlike: reply.canUnlike,
+            ),
+            onLike: act,
+          ),
+        ] else if (reply.likeCount != null && reply.likeCount! > 0) ...[
           const SizedBox(width: 10),
           Text('${reply.likeCount} 赞',
               style: TextStyle(fontSize: 11.5, color: p.cream)),

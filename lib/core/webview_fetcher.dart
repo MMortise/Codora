@@ -49,29 +49,35 @@ class WebViewFetcher {
   }) =>
       _json(origin, path, userAgent: userAgent, timeout: timeout);
 
-  /// POSTs [body] as JSON and returns the decoded answer.
+  /// Sends a write and returns the decoded answer.
   ///
   /// Everything [getJson] says applies here and then some: a write has to
   /// carry the session the site issued, and the session the site issued is
   /// the one in this browser. [headers] is where a site's own condition goes
   /// — Discourse will not take a write without the CSRF token it handed out.
   ///
+  /// [method] because a write's shape is the site's business: Discourse takes
+  /// a like as a POST and the taking back of one as a DELETE of the same
+  /// thing. [body] may be left out for a write that says everything in its
+  /// path.
+  ///
   /// The status comes back on the exception rather than as a thrown string,
   /// because a refusal here is usually the site explaining itself (too short,
   /// too soon, the topic is closed) and the caller is the one that knows how
   /// to read it.
-  Future<Object?> postJson(
+  Future<Object?> sendJson(
     Uri origin,
     String path, {
-    required Object? body,
+    required String method,
     required String userAgent,
+    Object? body,
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 30),
   }) =>
       _json(origin, path,
           userAgent: userAgent,
-          method: 'POST',
-          body: jsonEncode(body),
+          method: method,
+          body: body == null ? null : jsonEncode(body),
           headers: headers,
           timeout: timeout);
 
