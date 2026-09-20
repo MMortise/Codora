@@ -323,6 +323,48 @@ void main() {
       await disposeApp(tester, c);
     });
 
+    testWidgets('a refresh that fails says so rather than looking idle',
+        (tester) async {
+      // The profile already read is still worth keeping, but it cannot be
+      // passed off as current: a failed read left exactly the numbers that
+      // were there before and no sign of why, so 刷新 looked like it had done
+      // nothing at all.
+      var attempt = 0;
+      final site = FakeSource(() async {
+        if (++attempt == 1) return parse([30]);
+        throw Exception('linux.do 没有回应');
+      });
+      final c = await showSource(tester, site);
+      expect(find.text('wxVIP'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.refresh_rounded));
+      await tester.pumpAndSettle();
+
+      expect(site.calls, 2);
+      expect(find.text('wxVIP'), findsOneWidget,
+          reason: 'what it had is better than nothing');
+      expect(find.text('linux.do 没有回应'), findsOneWidget,
+          reason: 'but it is not what the forum says now');
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('and stops saying so once a read lands', (tester) async {
+      var attempt = 0;
+      final site = FakeSource(() async {
+        if (++attempt == 2) throw Exception('linux.do 没有回应');
+        return parse([30]);
+      });
+      final c = await showSource(tester, site);
+      await tester.tap(find.byIcon(Icons.refresh_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('linux.do 没有回应'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.refresh_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('linux.do 没有回应'), findsNothing);
+      await disposeApp(tester, c);
+    });
+
     testWidgets('shows who the reader is, and what a token cannot reach',
         (tester) async {
       final c = await show(tester, parse([30]));

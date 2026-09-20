@@ -95,7 +95,9 @@ class LinuxDoSource implements ForumSource {
       );
 
   Future<Member> _readMember() async {
-    final session = await _get('/session/current.json');
+    // Every read here is asked again because someone pressed 刷新 or an hour
+    // went by; a cached answer would defeat both.
+    final session = await _get('/session/current.json', fresh: true);
     final me = session['current_user'] as Map? ?? const {};
     final username = '${me['username']}';
 
@@ -108,19 +110,23 @@ class LinuxDoSource implements ForumSource {
     await (
       Future(() async {
         try {
-          profile = (await _get('/u/$username.json'))['user'] as Map?;
+          profile = (await _get('/u/$username.json', fresh: true))['user']
+              as Map?;
         } catch (_) {}
       }),
       Future(() async {
         try {
           notices = (await _get('/notifications.json',
-              query: {'filter': 'unread', 'limit': '5'}))['notifications'] as List?;
+                  query: {'filter': 'unread', 'limit': '5'},
+                  fresh: true))['notifications']
+              as List?;
         } catch (_) {}
       }),
       Future(() async {
         try {
-          summary = (await _get('/u/$username/summary.json'))['user_summary']
-              as Map?;
+          summary =
+              (await _get('/u/$username/summary.json', fresh: true))
+                  ['user_summary'] as Map?;
         } catch (_) {}
       }),
     ).wait;
@@ -614,13 +620,22 @@ class LinuxDoSource implements ForumSource {
     }
   }
 
-  Future<Map> _get(String path, {Map<String, String>? query}) async {
-    final target = query == null || query.isEmpty
+  /// [fresh] for a read whose whole point is that it is current — what the
+  /// inbox holds *now*. `no-store` already keeps the browser's own cache out
+  /// of it; an address nobody has asked for before is what also keeps out the
+  /// ones in between, which this site has several of.
+  Future<Map> _get(String path,
+      {Map<String, String>? query, bool fresh = false}) async {
+    final params = {
+      ...?query,
+      if (fresh) '_': '${DateTime.now().millisecondsSinceEpoch}',
+    };
+    final target = params.isEmpty
         ? path
         : Uri.parse(path).replace(
             queryParameters: {
               ...Uri.parse(path).queryParameters,
-              ...query,
+              ...params,
             },
           ).toString();
 

@@ -52,8 +52,17 @@ class MemberCard extends ConsumerWidget {
             radius: Radii.card,
             padding: const EdgeInsets.fromLTRB(6, 13, 6, 12),
             child: switch ((profile, member.error)) {
-              (final Member found, _) =>
-                _Profile(site: site, member: found, busy: member.isLoading),
+              (final Member found, final failure) => _Profile(
+                  site: site,
+                  member: found,
+                  busy: member.isLoading,
+                  // A read that failed with a profile already on screen used
+                  // to leave no trace at all: the old numbers stayed, and
+                  // pressing 刷新 looked like it had done nothing. The profile
+                  // is still worth keeping — it just cannot be passed off as
+                  // current.
+                  problem: failure == null ? null : errorText(failure),
+                ),
               (_, final Object failure?) => _Failed(
                   errorText(failure),
                   site: site,
@@ -73,11 +82,16 @@ class _Profile extends ConsumerWidget {
     required this.site,
     required this.member,
     this.busy = false,
+    this.problem,
   });
 
   final SiteId site;
   final Member member;
   final bool busy;
+
+  /// Why the last read did not land, when one did not. The profile below it
+  /// is the one from before.
+  final String? problem;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -158,6 +172,10 @@ class _Profile extends ConsumerWidget {
                 style:
                     TextStyle(fontSize: 10.5, height: 1.3, color: p.inkFaint)),
           ),
+        ],
+        if (problem case final problem?) ...[
+          const _Rule(),
+          Padding(padding: _inset, child: _Problem(problem)),
         ],
       ],
     );
@@ -419,30 +437,46 @@ class _Failed extends StatelessWidget {
   final bool busy;
 
   @override
+  Widget build(BuildContext context) => Padding(
+        padding: _inset.copyWith(right: 2),
+        child: _Problem(
+          message,
+          // The one place this is really wanted: a card that could not be
+          // read has nothing else to offer, and a pointer that leaves and
+          // comes back only waits out the minute before it tries again by
+          // itself.
+          trailing: _Refresh(site: site, busy: busy),
+        ),
+      );
+}
+
+/// What went wrong, in the card's own small print.
+class _Problem extends StatelessWidget {
+  const _Problem(this.message, {this.trailing});
+
+  final String message;
+  final Widget? trailing;
+
+  @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    return Padding(
-      padding: _inset.copyWith(right: 2),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Icon(Icons.error_outline_rounded, size: 14, color: p.rose),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 1),
-            child: Text(message,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style:
-                    TextStyle(fontSize: 12, height: 1.35, color: p.inkMuted)),
-          ),
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(Icons.error_outline_rounded, size: 14, color: p.rose),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Padding(
+          padding: const EdgeInsets.only(top: 1),
+          child: Text(message,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, height: 1.35, color: p.inkMuted)),
         ),
+      ),
+      if (trailing case final trailing?) ...[
         const SizedBox(width: 4),
-        // The one place this is really wanted: a card that could not be read
-        // has nothing else to offer, and a pointer that leaves and comes back
-        // only waits out the minute before it tries again by itself.
-        _Refresh(site: site, busy: busy),
-      ]),
-    );
+        trailing,
+      ],
+    ]);
   }
 }
 

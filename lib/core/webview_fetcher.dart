@@ -98,6 +98,11 @@ class WebViewFetcher {
               const init = {
                 method: method,
                 credentials: 'include',
+                // Every one of these asks for the state of something right
+                // now. Left to the browser's own rules a read can be answered
+                // from a cache, which is how a card could be refreshed and
+                // come back with the number it already had.
+                cache: 'no-store',
                 headers: Object.assign({
                   'Accept': 'application/json',
                   'X-Requested-With': 'XMLHttpRequest',
