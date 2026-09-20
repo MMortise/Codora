@@ -123,6 +123,42 @@ void main() {
     });
   });
 
+  // Discourse rotates the sign-in cookie as the site is used, so the copy
+  // kept in settings goes stale on its own. Writing it back over the
+  // browser's at every launch — which is what seeding blindly did — signs the
+  // reader out after enough restarts, and the app goes on believing all is
+  // well because settings still hold a `_t`.
+  group('which copy of the credentials wins at launch', () {
+    test('the browser, whenever it has a sign-in of its own', () {
+      expect(
+        believedLinuxDoCookie(
+            held: 'cf_clearance=new; _t=rotated', stored: 'cf_clearance=old; _t=stale'),
+        'cf_clearance=new; _t=rotated',
+      );
+    });
+
+    test('and what was stored, when the browser has none', () {
+      // A fresh install, a new container, or a sign-in carried in by hand.
+      expect(
+        believedLinuxDoCookie(held: 'cf_clearance=new', stored: 'cf_clearance=a; _t=c'),
+        'cf_clearance=a; _t=c',
+      );
+    });
+
+    test('an empty browser takes what there is', () {
+      expect(believedLinuxDoCookie(held: '', stored: 'cf_clearance=a; _t=c'),
+          'cf_clearance=a; _t=c');
+    });
+
+    test('and a cookie whose name merely ends in _t is not a sign-in', () {
+      expect(
+        believedLinuxDoCookie(held: 'visit_t=b', stored: '_t=c'),
+        '_t=c',
+        reason: 'the browser has nothing to keep',
+      );
+    });
+  });
+
   group('what gets carried into the browser', () {
     test('every cookie of the sign-in', () {
       final applied = cookiesToApply(_loggedIn);

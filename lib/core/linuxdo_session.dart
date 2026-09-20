@@ -1,6 +1,9 @@
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'settings.dart';
+import 'util.dart';
 import 'webview_fetcher.dart';
 
 /// The one origin any of this applies to.
@@ -64,6 +67,38 @@ Future<void> applyLinuxDoCookies(String header) async {
       isSecure: true,
     );
   }
+}
+
+/// Which of the two copies of the credentials to believe.
+///
+/// The browser's, whenever it holds a sign-in of its own. Discourse rotates
+/// that cookie as the site is used, so the copy kept in settings goes stale
+/// by itself — and writing the stale one back over the browser's, which is
+/// what seeding blindly at every launch did, eventually signs the reader out
+/// while settings go on holding a `_t` and the app goes on believing all is
+/// well. What was stored is for a browser that has nothing: a fresh install,
+/// or a sign-in carried in from somewhere else by hand.
+@visibleForTesting
+String believedLinuxDoCookie({required String held, required String stored}) =>
+    cookieHeaderHas(held, kLinuxdoSignIn) ? held : stored;
+
+/// Brings the browser and the stored copy into agreement at launch, and
+/// answers with the one to keep.
+///
+/// Everything this site serves is fetched inside that browser, so whatever it
+/// holds is what actually goes out; storing anything else only makes the app
+/// wrong about itself.
+Future<String> adoptLinuxDoCookies(String stored) async {
+  final jar = CookieManager.instance();
+  final held = await jar.getCookies(url: WebUri(linuxdoOrigin.toString()));
+  final header = believedLinuxDoCookie(
+    held: [for (final c in held) '${c.name}=${c.value}'].join('; '),
+    stored: stored,
+  );
+  // Only when the browser has no sign-in of its own is there anything to put
+  // there; otherwise this would be the overwrite the whole thing avoids.
+  if (header == stored) await applyLinuxDoCookies(stored);
+  return header;
 }
 
 /// Drops what the embedded browser is holding for linux.do.

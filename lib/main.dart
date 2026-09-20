@@ -24,11 +24,16 @@ Future<void> main() async {
   // to look, and trimmed now in case the budget was lowered last time.
   await DiskCache.instance.prepare(budget: AppSettings.bootstrap.cacheLimit);
   // The browser linux.do is read through starts each launch with whatever
-  // WebKit persisted, which is not necessarily what was saved here. Seeding
-  // it from settings makes the stored credentials the ones that are actually
-  // sent, and a launch failing to do so must not stop the app opening.
+  // WebKit persisted, and that is what actually goes out — so the two copies
+  // are brought into agreement, the browser's winning where it has one. A
+  // launch failing to do so must not stop the app opening.
   try {
-    await applyLinuxDoCookies(AppSettings.bootstrap.linuxdoCookie);
+    final header = await adoptLinuxDoCookies(AppSettings.bootstrap.linuxdoCookie);
+    if (header != AppSettings.bootstrap.linuxdoCookie) {
+      AppSettings.bootstrap =
+          AppSettings.bootstrap.copyWith(linuxdoCookie: header);
+      await AppSettings.bootstrap.save();
+    }
   } catch (_) {}
   if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
     await windowManager.ensureInitialized();

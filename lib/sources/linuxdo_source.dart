@@ -97,7 +97,20 @@ class LinuxDoSource implements ForumSource {
   Future<Member> _readMember() async {
     // Every read here is asked again because someone pressed 刷新 or an hour
     // went by; a cached answer would defeat both.
-    final session = await _get('/session/current.json', fresh: true);
+    final session = await _get(
+      '/session/current.json',
+      fresh: true,
+      // Discourse answers this one with a 404 when nobody is signed in. Read
+      // as a missing page that says nothing; what it means is that the
+      // browser's sign-in has gone — expired, or rotated out from under the
+      // copy in settings, which is why a card was offered at all.
+      notFound: () => AuthRequiredException(
+        id,
+        'linux.do 的登录已经失效',
+        AuthRecovery.browser,
+        hint: '站点说这边没有登录。到设置里先退出登录，再用内置浏览器登录一次。',
+      ),
+    );
     final me = session['current_user'] as Map? ?? const {};
     final username = '${me['username']}';
 
@@ -624,8 +637,13 @@ class LinuxDoSource implements ForumSource {
   /// inbox holds *now*. `no-store` already keeps the browser's own cache out
   /// of it; an address nobody has asked for before is what also keeps out the
   /// ones in between, which this site has several of.
+  /// [notFound] for a read where a 404 means something of its own — the
+  /// session endpoint answers with one when there is nobody signed in, and
+  /// "this page does not exist" is not what a reader needs to hear about it.
   Future<Map> _get(String path,
-      {Map<String, String>? query, bool fresh = false}) async {
+      {Map<String, String>? query,
+      bool fresh = false,
+      Exception Function()? notFound}) async {
     final params = {
       ...?query,
       if (fresh) '_': '${DateTime.now().millisecondsSinceEpoch}',
@@ -648,7 +666,9 @@ class LinuxDoSource implements ForumSource {
         throw AuthRequiredException(
             id, 'linux.do 的人机验证已过期', AuthRecovery.browser);
       }
-      if (e.status == 404) throw Exception('这个内容不存在，或者没有权限看');
+      if (e.status == 404) {
+        throw notFound?.call() ?? Exception('这个内容不存在，或者没有权限看');
+      }
       if (e.status == 429) throw Exception('请求太频繁了，等一会儿再试');
       if (e.status == 0) throw Exception('连不上 linux.do：${e.body}');
       throw Exception('linux.do 返回了 HTTP ${e.status}');
