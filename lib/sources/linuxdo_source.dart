@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
@@ -429,15 +430,22 @@ class LinuxDoSource implements ForumSource {
   // feed runs in is already signed in to it. Anonymous readers get no box:
   // there is nothing to send with.
   @override
-  Future<Reply> Function(String topicId, String text)? get reply =>
+  SendReply? get reply =>
       cookieHeaderHas(cookie, kLinuxdoSignIn) ? _reply : null;
 
   // Discourse counts a like as an action on a post, and taking one back as
   // the removal of that action. Both go out over the session the reading
   // already uses.
   @override
-  Future<LikeState> Function(String postId, {required bool like})? get like =>
+  ActOnLike? get like =>
       cookieHeaderHas(cookie, kLinuxdoSignIn) ? _like : null;
+
+  // Discourse takes a picture before the post that shows it exists: its own
+  // composer hands the file over, is told a short address for it, and writes
+  // that into the body. Nothing here departs from that.
+  @override
+  UploadImage? get uploadImage =>
+      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _uploadImage : null;
 
   Future<LikeState> _like(String postId, {required bool like}) async {
     _requireCookie();
@@ -474,11 +482,14 @@ class LinuxDoSource implements ForumSource {
     return const LikeState(count: 0);
   }
 
-  Future<Reply> _reply(String topicId, String text) async {
+  Future<Reply> _reply(String topicId, String text, {ReplyTarget? to}) async {
     _requireCookie();
     final answer = await _write('POST', '/posts', body: {
       'raw': text,
       'topic_id': asInt(topicId) ?? topicId,
+      // Discourse threads a reply by the floor it answers rather than by the
+      // post's id, and left out altogether it answers the thread as a whole.
+      'reply_to_post_number': ?to?.floor,
     });
     // Discourse answers with the post it made; some installs wrap it.
     final post = answer['post'] as Map? ?? answer;
@@ -490,18 +501,65 @@ class LinuxDoSource implements ForumSource {
     return parsePost(post);
   }
 
-  /// Sends something to linux.do, rather than asking it for something.
+  /// How big a picture can be before it is not worth the attempt.
   ///
-  /// Rails refuses a write that does not carry the CSRF token it handed this
-  /// session, and it is read here rather than kept: it belongs to the session
-  /// cookie, and that can be replaced under the app at any point by a sign-in
-  /// in the visible browser.
+  /// Not the forum's limit — that is the forum's to state, in its own words,
+  /// and it will. This is the bridge's: the bytes cross into the page as
+  /// base64, a third longer again, over a channel meant for small messages.
+  /// Past here, saying so at once beats a minute of nothing.
+  static const _pictureLimit = 12 * 1024 * 1024;
+
+  Future<String> _uploadImage(String filename, Uint8List bytes) async {
+    _requireCookie();
+    if (bytes.length > _pictureLimit) {
+      final mb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
+      throw Exception('这张图 $mb MB，太大了，先压一下再传');
+    }
+    final answer = await _writeFile(
+      '/uploads.json',
+      filename: filename,
+      bytes: bytes,
+      fields: {
+        // What the picture is for, which is what decides where the forum
+        // keeps it. Discourse reads `type`; an install old enough to want
+        // `upload_type` finds that, and neither minds the other being there.
+        'type': 'composer',
+        'upload_type': 'composer',
+      },
+    );
+    return uploadMarkdown(answer, filename: filename);
+  }
+
+  /// What to write into the box for a picture linux.do is now holding.
+  ///
+  /// The `upload://` address is the one to use rather than the plain URL: the
+  /// forum resolves it as it renders the post, so the picture keeps showing
+  /// when the file behind it moves to another store. The size goes in because
+  /// Discourse draws a picture at the size the markdown names, and a phone
+  /// screenshot with no size named is drawn at all 1179 of its pixels.
+  @visibleForTesting
+  static String uploadMarkdown(Map upload, {required String filename}) {
+    final at = _text(upload['short_url']?.toString()) ??
+        _text(upload['url']?.toString());
+    if (at == null) {
+      throw Exception('图片传上去了，但 linux.do 没说它在哪儿，刷新一下看看');
+    }
+    final name = _text(upload['original_filename']?.toString()) ?? filename;
+    final width = asInt(upload['width']);
+    final height = asInt(upload['height']);
+    final drawn = width != null && height != null && width > 0 && height > 0;
+    final size = drawn ? '|${width}x$height' : '';
+    // The name sits inside the brackets, where these three characters mean
+    // something else. A screenshot called `a[1]|b.png` would otherwise end
+    // the link early and leave the address as text.
+    final plain = name.replaceAll(RegExp(r'[\[\]|]'), '_');
+    return '![$plain$size]($at)';
+  }
+
+  /// Sends something to linux.do, rather than asking it for something.
   Future<Map> _write(String method, String path,
       {Map<String, Object?>? body}) async {
-    final csrf = '${(await _get('/session/csrf.json'))['csrf'] ?? ''}';
-    if (csrf.isEmpty) {
-      throw Exception('linux.do 没有给出提交凭证，重新登录一次再试');
-    }
+    final csrf = await _csrf();
     try {
       final answer = await WebViewFetcher.instance.sendJson(
         _origin,
@@ -518,6 +576,48 @@ class LinuxDoSource implements ForumSource {
     }
   }
 
+  /// The same, for a file. It cannot share [_write]'s body: a picture goes as
+  /// a form rather than as JSON, and it is the browser that has to write that
+  /// form.
+  Future<Map> _writeFile(
+    String path, {
+    required String filename,
+    required Uint8List bytes,
+    Map<String, String> fields = const {},
+  }) async {
+    final csrf = await _csrf();
+    try {
+      final answer = await WebViewFetcher.instance.sendFile(
+        _origin,
+        path,
+        field: 'file',
+        filename: filename,
+        bytes: bytes,
+        contentType: pictureContentType(filename),
+        fields: fields,
+        headers: {'X-CSRF-Token': csrf},
+        userAgent: userAgent,
+      );
+      if (answer is! Map) throw Exception('linux.do 返回了意外的结果');
+      return answer;
+    } on WebViewFetchException catch (e) {
+      throw Exception(uploadProblem(e));
+    }
+  }
+
+  /// The token Rails will not take a write without.
+  ///
+  /// Read per write rather than kept: it belongs to the session cookie, and
+  /// that can be replaced under the app at any point by a sign-in in the
+  /// visible browser.
+  Future<String> _csrf() async {
+    final csrf = '${(await _get('/session/csrf.json'))['csrf'] ?? ''}';
+    if (csrf.isEmpty) {
+      throw Exception('linux.do 没有给出提交凭证，重新登录一次再试');
+    }
+    return csrf;
+  }
+
   /// What to show when the forum refuses something.
   ///
   /// Discourse explains itself in the body — the post is too short, you are
@@ -526,6 +626,34 @@ class LinuxDoSource implements ForumSource {
   /// nothing about what to do differently.
   @visibleForTesting
   static String postProblem(WebViewFetchException e) {
+    if (_said(e) case final sentence?) return sentence;
+    if (e.isChallenge) return '人机验证过期了，用内置浏览器重新过一次';
+    if (e.status == 404) return '这个帖子不在了';
+    if (e.status == 0) return '没能把回复送出去，检查一下网络';
+    return '没能发送（HTTP ${e.status}）';
+  }
+
+  /// The same for a picture. Discourse is usually the one talking here as
+  /// well — too big, not that kind of file, too many today — and only the
+  /// fallbacks differ, because a refused upload does not mean the thread is
+  /// gone.
+  @visibleForTesting
+  static String uploadProblem(WebViewFetchException e) {
+    if (_said(e) case final sentence?) return sentence;
+    // A 403 is not among these: the forum explains a refusal of its own in
+    // the body, which [_said] has already read, and a 403 with nothing in it
+    // is Cloudflare's — which is what [WebViewFetchException.isChallenge]
+    // above has just said.
+    if (e.isChallenge) return '人机验证过期了，用内置浏览器重新过一次';
+    if (e.status == 413) return '图片太大了，linux.do 没有收';
+    if (e.status == 422) return 'linux.do 不接受这张图片';
+    if (e.status == 0) return '没能把图片传上去，检查一下网络';
+    return '没能上传（HTTP ${e.status}）';
+  }
+
+  /// Whatever the forum itself said about the refusal, or null when it said
+  /// nothing a reader could act on.
+  static String? _said(WebViewFetchException e) {
     try {
       final data = jsonDecode(e.body);
       if (data is Map) {
@@ -538,13 +666,9 @@ class LinuxDoSource implements ForumSource {
         if (one.isNotEmpty) return one;
       }
     } catch (_) {
-      // Not JSON. The status below is then all there is to go on.
+      // Not JSON. The status is then all there is to go on.
     }
-    if (e.isChallenge) return '人机验证过期了，用内置浏览器重新过一次';
-    if (e.status == 403) return '没有权限回复这个帖子';
-    if (e.status == 404) return '这个帖子不在了';
-    if (e.status == 0) return '没能把回复送出去，检查一下网络';
-    return '没能发送（HTTP ${e.status}）';
+    return null;
   }
 
   @override
@@ -603,9 +727,10 @@ class LinuxDoSource implements ForumSource {
 
   static Reply _mapPost(Map p) {
     final like = parseLike(p);
+    final cooked = '${p['cooked'] ?? ''}';
     return Reply(
       id: '${p['id']}',
-      content: '${p['cooked'] ?? ''}',
+      content: cooked,
       author: _postAuthor(p),
       createdAt: fromIso(p['created_at']),
       floor: asInt(p['post_number']),
@@ -613,6 +738,23 @@ class LinuxDoSource implements ForumSource {
       liked: like.liked,
       canLike: like.canLike,
       canUnlike: like.canUnlike,
+      quote: _answered(p, cooked),
+    );
+  }
+
+  /// Which post a reply was written to, where Discourse says.
+  ///
+  /// Only when the body does not carry it already: someone who pressed quote
+  /// rather than reply gets an `<aside class="quote">` inside the post, with
+  /// the name and the words in it, and a line above saying the same thing
+  /// would be the second copy of one thought.
+  static ReplyQuote? _answered(Map p, String cooked) {
+    final floor = asInt(p['reply_to_post_number']);
+    if (floor == null) return null;
+    if (cooked.contains('<aside class="quote')) return null;
+    return ReplyQuote(
+      author: _text((p['reply_to_user'] as Map?)?['username']?.toString()),
+      floor: floor,
     );
   }
 

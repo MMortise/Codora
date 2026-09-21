@@ -14,6 +14,7 @@ import '../widgets/like_button.dart';
 import '../widgets/post_body.dart';
 import '../widgets/relative_time.dart';
 import '../widgets/swap.dart';
+import 'pick_pictures.dart';
 import 'providers.dart';
 import 'reply_box.dart';
 
@@ -151,6 +152,11 @@ class TopicDetailView extends ConsumerStatefulWidget {
 class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
   final _scroll = ScrollController();
 
+  /// Which post the box is aimed at, where the reader picked one out of the
+  /// thread. Null means the thread itself, which is what a forum takes when
+  /// nothing says otherwise.
+  ReplyTarget? _replyTo;
+
   /// Below this the button would scroll almost nowhere, so it stays hidden.
   static const _showTopButtonAfter = 400.0;
   bool _canScrollUp = false;
@@ -201,7 +207,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
   /// provider — so only a reply is written back; the button there keeps what
   /// the forum answered until the topic is loaded again.
   Future<LikeState> _like(
-    Future<LikeState> Function(String, {required bool like}) act,
+    ActOnLike act,
     String postId,
     bool wanted, {
     String? replyId,
@@ -213,13 +219,37 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     return state;
   }
 
+  /// Aims the box at one post. The box takes the cursor from there.
+  void _answer(Reply reply) => setState(() => _replyTo = ReplyTarget(
+        postId: reply.id,
+        floor: reply.floor,
+        author: reply.author?.name,
+      ));
+
+  /// Picks pictures and hands them to the site, answering with what to write
+  /// into the box for them.
+  ///
+  /// One at a time rather than all at once: a forum counts uploads against a
+  /// limit, and one that says no to the fourth should say so about the fourth
+  /// rather than about whichever of four happened to be in flight.
+  Future<String?> _attach(UploadImage upload) async {
+    final picked = await pickPictures();
+    if (picked.isEmpty) return null;
+    final written = <String>[];
+    for (final picture in picked) {
+      written.add(await upload(picture.name, picture.bytes));
+    }
+    return written.join('\n');
+  }
+
   /// Sends a reply and puts it at the end of the thread.
   ///
   /// Anything thrown here is the forum explaining why it refused, and the box
   /// is what shows it — so it is left to travel back rather than caught.
-  Future<void> _send(
-      Future<Reply> Function(String, String) send, String text) async {
-    final posted = await send(widget.topic.id, text);
+  Future<void> _send(SendReply send, String text) async {
+    final posted = await send(widget.topic.id, text, to: _replyTo);
+    // It went, so the box is answering the thread again.
+    if (mounted) setState(() => _replyTo = null);
     if (!ref.read(repliesProvider(widget.topic).notifier).appendSent(posted)) {
       ref.invalidate(repliesProvider(widget.topic));
       return;
@@ -358,7 +388,14 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
       // to, signed in, and a post that actually loaded.
       if (detail.hasValue)
         if (source.reply case final send?)
-          ReplyBox(onSend: (text) => _send(send, text)),
+          ReplyBox(
+            to: _replyTo,
+            onCancelTarget: () => setState(() => _replyTo = null),
+            onAttach: source.uploadImage == null
+                ? null
+                : () => _attach(source.uploadImage!),
+            onSend: (text) => _send(send, text),
+          ),
     ]);
   }
 
@@ -404,6 +441,8 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                 ? null
                 : (wanted) =>
                     _like(act, r.all[i].id, wanted, replyId: r.all[i].id),
+            onReply:
+                source.reply == null ? null : () => _answer(r.all[i]),
           ),
         ),
         SliverToBoxAdapter(
@@ -552,6 +591,7 @@ class ReplyTile extends StatelessWidget {
     this.nested = false,
     this.first = false,
     this.onLike,
+    this.onReply,
   });
 
   final Reply reply;
@@ -563,6 +603,10 @@ class ReplyTile extends StatelessWidget {
   /// Null where the site has no likes to give, or the reader is not signed
   /// in to give one.
   final Future<LikeState> Function(bool like)? onLike;
+
+  /// Aims the box at the foot of the thread at this reply. Null where the
+  /// thread cannot be answered at all.
+  final VoidCallback? onReply;
 
   /// The first reply in the thread, which the count's own rule already sits
   /// above — a border here would draw a second line right under it.
@@ -612,6 +656,15 @@ class ReplyTile extends StatelessWidget {
           const SizedBox(width: 10),
           Text('${reply.likeCount} 赞',
               style: TextStyle(fontSize: 11.5, color: p.cream)),
+        ],
+        if (onReply case final answer?) ...[
+          const SizedBox(width: 2),
+          QuietIconButton(
+              icon: Icons.reply_rounded,
+              tooltip: '回复 TA',
+              size: 13,
+              box: 24,
+              onPressed: answer),
         ],
         if (reply.floor != null) ...[
           const SizedBox(width: 10),

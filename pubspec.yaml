@@ -46,6 +46,7 @@ dependencies:
   flutter_markdown_plus: ^1.0.12
   path_provider: ^2.1.6
   crypto: ^3.0.7
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:

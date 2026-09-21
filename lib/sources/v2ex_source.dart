@@ -90,12 +90,15 @@ class V2exSource implements ForumSource {
   // Reading only. The v2 API has no write side at all — replying on V2EX
   // needs a web session and the form's own once-off token.
   @override
-  Future<Reply> Function(String, String)? get reply => null;
+  SendReply? get reply => null;
 
   // V2EX has no likes to give: it counts thanks, and sending one needs a web
   // session and the form's own token.
   @override
-  Future<LikeState> Function(String, {required bool like})? get like => null;
+  ActOnLike? get like => null;
+
+  @override
+  UploadImage? get uploadImage => null;
 
   /// How long the card waits before saying so. [kMemberDeadline] is where
   /// the number is argued; it is named again here because the sentence below

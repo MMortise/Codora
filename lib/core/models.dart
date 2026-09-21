@@ -271,6 +271,25 @@ class ReplyQuote {
   bool get isEmpty => author == null && floor == null;
 }
 
+/// A post a new reply is aimed at, rather than the thread as a whole.
+///
+/// A forum that threads replies wants the post's own number; the box over
+/// which one is written wants a name to show. Both travel together, so the
+/// pane hands the same object to either.
+class ReplyTarget {
+  const ReplyTarget({required this.postId, this.floor, this.author});
+
+  /// The post as the site numbers it.
+  final String postId;
+
+  /// Which floor it stands on, where the site counts them. Discourse threads
+  /// a reply by this and not by the post id.
+  final int? floor;
+
+  /// Who wrote it, for the line over the box.
+  final String? author;
+}
+
 class Reply {
   const Reply({
     required this.id,

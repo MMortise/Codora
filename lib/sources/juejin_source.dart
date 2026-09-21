@@ -41,10 +41,13 @@ class JuejinSource implements ForumSource {
   // Reading only. 掘金's write endpoints want a signature the app does not
   // have any way to produce.
   @override
-  Future<Reply> Function(String, String)? get reply => null;
+  SendReply? get reply => null;
 
   @override
-  Future<LikeState> Function(String, {required bool like})? get like => null;
+  ActOnLike? get like => null;
+
+  @override
+  UploadImage? get uploadImage => null;
 
   @override
   SiteAccess get access => cookie.isEmpty

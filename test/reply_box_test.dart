@@ -1,5 +1,7 @@
 // The box at the foot of a thread: when it is offered at all, what it does
 // with what is written in it, and what happens when the forum says no.
+import 'dart:async';
+
 import 'package:codora/core/models.dart';
 import 'package:codora/features/providers.dart';
 import 'package:codora/features/reply_box.dart';
@@ -21,7 +23,13 @@ Reply _sent(String content) =>
 class _OneReply extends RepliesNotifier {
   @override
   Future<RepliesState> build(TopicRef arg) async => const RepliesState(
-        items: [Reply(id: '1', content: '<p>先来的回复</p>', floor: 2)],
+        items: [
+          Reply(
+              id: '1',
+              content: '<p>先来的回复</p>',
+              floor: 2,
+              author: Author(name: 'someone')),
+        ],
         total: 1,
       );
 }
@@ -171,6 +179,146 @@ void main() {
     });
   });
 
+  group('answering one reply rather than the thread', () {
+    Future<void> pumpBox(
+      WidgetTester tester, {
+      ReplyTarget? to,
+      VoidCallback? onCancel,
+    }) =>
+        pumpApp(
+            tester,
+            ReplyBox(onSend: (_) async {}, to: to, onCancelTarget: onCancel),
+            size: const Size(700, 400));
+
+    testWidgets('nothing is said when the thread itself is the answer',
+        (tester) async {
+      await pumpBox(tester);
+      expect(find.textContaining('回复 '), findsNothing);
+    });
+
+    testWidgets('who is being answered stands over the box', (tester) async {
+      await pumpBox(tester,
+          to: const ReplyTarget(postId: '7', floor: 3, author: 'someone'));
+      expect(find.text('回复 someone #3'), findsOneWidget);
+    });
+
+    testWidgets('a post with nobody on it is still somewhere to write',
+        (tester) async {
+      // A thread whose first post has no name is not a thread nobody can be
+      // answered in.
+      await pumpBox(tester, to: const ReplyTarget(postId: '7'));
+      expect(find.text('回复 楼主'), findsOneWidget);
+    });
+
+    testWidgets('and it can be taken back', (tester) async {
+      var cancelled = 0;
+      await pumpBox(tester,
+          to: const ReplyTarget(postId: '7', floor: 3, author: 'someone'),
+          onCancel: () => cancelled++);
+      await tester.tap(find.byTooltip('改回复整个帖子'));
+      await tester.pumpAndSettle();
+      expect(cancelled, 1, reason: 'the pane owns it, so the pane clears it');
+    });
+  });
+
+  group('a picture in a reply', () {
+    Future<void> pumpBox(
+      WidgetTester tester,
+      Future<String?> Function()? onAttach, {
+      Future<void> Function(String)? onSend,
+    }) =>
+        pumpApp(
+            tester,
+            ReplyBox(onSend: onSend ?? (_) async {}, onAttach: onAttach),
+            size: const Size(700, 400));
+
+    Finder pictureButton() => find.byTooltip('插入图片');
+
+    testWidgets('not offered by a site that takes none', (tester) async {
+      await pumpBox(tester, null);
+      expect(pictureButton(), findsNothing,
+          reason: 'a button that cannot upload is a promise nothing keeps');
+    });
+
+    testWidgets('what the forum answers is written in at the cursor',
+        (tester) async {
+      // Where the cursor was, not at the end: someone who wrote a paragraph,
+      // went back up and asked for a picture meant it there.
+      await pumpBox(tester, () async => '![a.png|60x40](upload://abc.png)');
+      await tester.enterText(find.byType(TextField), '先写一句');
+      final field =
+          tester.widget<TextField>(find.byType(TextField)).controller!;
+      field.selection = const TextSelection.collapsed(offset: 2);
+      await tester.pump();
+
+      await tester.tap(pictureButton());
+      await tester.pumpAndSettle();
+
+      expect(field.text, '先写\n![a.png|60x40](upload://abc.png)\n一句');
+      expect(field.selection.baseOffset,
+          '先写\n![a.png|60x40](upload://abc.png)\n'.length,
+          reason: 'the cursor carries on after it');
+    });
+
+    testWidgets('into an empty box it is the whole of it', (tester) async {
+      await pumpBox(tester, () async => '![a.png](upload://abc.png)');
+      await tester.tap(pictureButton());
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          '![a.png](upload://abc.png)',
+          reason: 'no blank line in front of the first thing written');
+    });
+
+    testWidgets('choosing none leaves what was written alone', (tester) async {
+      await pumpBox(tester, () async => null);
+      await tester.enterText(find.byType(TextField), '说得好');
+      await tester.pump();
+      await tester.tap(pictureButton());
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          '说得好');
+    });
+
+    testWidgets('a refusal is the forum\'s own sentence, and nothing is written',
+        (tester) async {
+      await pumpBox(tester, () async => throw Exception('图片太大了'));
+      await tester.enterText(find.byType(TextField), '说得好');
+      await tester.pump();
+      await tester.tap(pictureButton());
+      await tester.pumpAndSettle();
+
+      expect(find.text('图片太大了'), findsOneWidget);
+      expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          '说得好');
+    });
+
+    testWidgets('nothing goes while a picture is still on its way',
+        (tester) async {
+      // Held open on purpose: sending now would send a reply with a hole
+      // where the picture was going to be.
+      final answered = Completer<String?>();
+      var sent = 0;
+      await pumpBox(tester, () => answered.future,
+          onSend: (_) async => sent++);
+      await tester.enterText(find.byType(TextField), '说得好');
+      await tester.pump();
+      await tester.tap(pictureButton());
+      await tester.pump();
+
+      expect(tester.widget<FilledButton>(sendButton()).onPressed, isNull);
+      await tester.tap(sendButton(), warnIfMissed: false);
+      // Pumped rather than settled: the spinner in the button's place is an
+      // animation that never ends, and settling waits for one that does.
+      await tester.pump();
+      expect(sent, 0);
+
+      answered.complete('![a.png](upload://abc.png)');
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(sendButton()).onPressed, isNotNull,
+          reason: 'and goes again once the picture has landed');
+    });
+  });
+
   group('where the pane offers one', () {
     Future<ProviderContainer> pumpPane(
       WidgetTester tester, {
@@ -212,7 +360,7 @@ void main() {
 
     testWidgets('and one that can', (tester) async {
       await pumpPane(tester,
-          source: FakeSource(null, onReply: (_, t) async => _sent(t)));
+          source: FakeSource(null, onReply: (_, t, {to}) async => _sent(t)));
       expect(find.byType(ReplyBox), findsOneWidget);
     });
 
@@ -220,7 +368,7 @@ void main() {
         (tester) async {
       String? topicId;
       final container = await pumpPane(tester,
-          source: FakeSource(null, onReply: (id, text) async {
+          source: FakeSource(null, onReply: (id, text, {to}) async {
             topicId = id;
             return _sent('<p>$text</p>');
           }));
@@ -239,12 +387,55 @@ void main() {
       expect(find.byType(ReplyTile), findsNWidgets(2));
     });
 
+    testWidgets('a reply aimed at one post is sent to that post',
+        (tester) async {
+      ReplyTarget? aimed;
+      await pumpPane(tester,
+          source: FakeSource(null, onReply: (id, text, {to}) async {
+            aimed = to;
+            return _sent('<p>$text</p>');
+          }));
+
+      await tester.tap(find.byTooltip('回复 TA'));
+      await tester.pumpAndSettle();
+      expect(find.text('回复 someone #2'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), '同意');
+      await tester.pump();
+      await tester.tap(sendButton());
+      await tester.pumpAndSettle();
+
+      expect(aimed?.postId, '1');
+      expect(aimed?.floor, 2, reason: 'the floor is what Discourse threads by');
+      expect(find.text('回复 someone #2'), findsNothing,
+          reason: 'it went, so the box is answering the thread again');
+    });
+
+    testWidgets('no such button where the thread cannot be answered',
+        (tester) async {
+      await pumpPane(tester, source: FakeSource(null));
+      expect(find.byTooltip('回复 TA'), findsNothing);
+    });
+
+    testWidgets('a picture button only where the site takes one',
+        (tester) async {
+      await pumpPane(tester,
+          source: FakeSource(null, onReply: (_, t, {to}) async => _sent(t)));
+      expect(find.byTooltip('插入图片'), findsNothing);
+
+      await pumpPane(tester,
+          source: FakeSource(null,
+              onReply: (_, t, {to}) async => _sent(t),
+              onUpload: (name, bytes) async => '![$name](upload://a.png)'));
+      expect(find.byTooltip('插入图片'), findsOneWidget);
+    });
+
     testWidgets('a reply to a thread that never loaded says so', (tester) async {
       // There is nothing on screen to put it in, so the pane is told to ask
       // for the thread again rather than quietly dropping a reply that did go
       // out.
       final container = await pumpPane(tester,
-          source: FakeSource(null, onReply: (_, t) async => _sent(t)),
+          source: FakeSource(null, onReply: (_, t, {to}) async => _sent(t)),
           thread: _NoThread.new);
       expect(container.read(repliesProvider(_topic)).hasError, isTrue);
       expect(

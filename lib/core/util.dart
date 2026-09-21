@@ -43,6 +43,31 @@ String errorText(Object error) => '$error'.replaceFirst('Exception: ', '');
 bool cookieHeaderHas(String header, String name) =>
     header.split(';').any((pair) => pair.trim().split('=').first == name);
 
+/// The kinds of picture worth offering a forum, and what each one is.
+///
+/// A site decides what it takes by the extension, but the browser writes a
+/// content type onto every file it sends in a form — and a PNG announced as
+/// `application/octet-stream` is a PNG a forum can refuse.
+const kPictureTypes = <String, String>{
+  'png': 'image/png',
+  'jpg': 'image/jpeg',
+  'jpeg': 'image/jpeg',
+  'gif': 'image/gif',
+  'webp': 'image/webp',
+  'avif': 'image/avif',
+  'heic': 'image/heic',
+  'heif': 'image/heif',
+  'bmp': 'image/bmp',
+  'svg': 'image/svg+xml',
+};
+
+/// What [filename] is, as far as handing it to a site is concerned.
+String pictureContentType(String filename) {
+  final dot = filename.lastIndexOf('.');
+  final kind = dot < 0 ? '' : filename.substring(dot + 1).toLowerCase();
+  return kPictureTypes[kind] ?? 'application/octet-stream';
+}
+
 String compactCount(int? n) {
   if (n == null) return '';
   if (n < 1000) return '$n';

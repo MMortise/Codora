@@ -15,6 +15,23 @@ import 'models.dart';
 /// site is held to the same number, so no card can be the one that hangs.
 const kMemberDeadline = Duration(seconds: 8);
 
+/// How a site is answered: which thread, what to say, and — where the site
+/// threads replies rather than just stacking them — which post is being
+/// answered.
+typedef SendReply = Future<Reply> Function(String topicId, String text,
+    {ReplyTarget? to});
+
+/// How a like is given, or taken back.
+typedef ActOnLike = Future<LikeState> Function(String postId,
+    {required bool like});
+
+/// How a picture gets to a site before the post that shows it exists.
+///
+/// It answers with what to write into the box — `upload://…` on Discourse —
+/// because how a body refers to a picture is the site's own business and not
+/// the composer's.
+typedef UploadImage = Future<String> Function(String filename, Uint8List bytes);
+
 abstract class ForumSource {
   SiteId get id;
   String get name;
@@ -74,7 +91,7 @@ abstract class ForumSource {
   /// the pane puts that at the end of the thread rather than reloading, which
   /// would take the reader back to the first page of something they had
   /// scrolled through, with their own words the part not loaded.
-  Future<Reply> Function(String topicId, String text)? get reply => null;
+  SendReply? get reply => null;
 
   /// How to like a post, or null where the site has no such thing — or the
   /// stored credentials do not sign the reader in.
@@ -82,8 +99,15 @@ abstract class ForumSource {
   /// A field for the same reason as [reply]. It answers with where the post
   /// stands afterwards rather than with nothing, because the count it comes
   /// back with is the site's, not one the app worked out by adding one.
-  Future<LikeState> Function(String postId, {required bool like})? get like =>
-      null;
+  ActOnLike? get like => null;
+
+  /// How to hand this site a picture for a post that is still being written,
+  /// or null where it takes none — and null as well when it would take one
+  /// from someone signed in, but nobody is.
+  ///
+  /// A field for the same reason as [reply]: whether the box shows a picture
+  /// button is decided before anyone presses it.
+  UploadImage? get uploadImage => null;
 
   /// If [uri] points at a topic on this site, return its id.
   String? topicIdFromUrl(Uri uri);

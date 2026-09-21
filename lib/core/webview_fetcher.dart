@@ -129,6 +129,81 @@ class WebViewFetcher {
         )
         .timeout(timeout);
 
+    return _decode(result);
+  }
+
+  /// Sends a file the way the site's own page would.
+  ///
+  /// Everything [sendJson] says applies, and one thing more: an upload goes as
+  /// `multipart/form-data`, whose boundary the browser writes. So no content
+  /// type is set here — setting one would send a boundary nothing had used —
+  /// and the bytes travel to the page as base64, which is what can be handed
+  /// over the bridge.
+  ///
+  /// Slower than everything else here by the size of the picture, so the
+  /// patience is its own.
+  Future<Object?> sendFile(
+    Uri origin,
+    String path, {
+    required String userAgent,
+    required String field,
+    required String filename,
+    required Uint8List bytes,
+    String contentType = 'application/octet-stream',
+    Map<String, String> fields = const {},
+    Map<String, String> headers = const {},
+    Duration timeout = const Duration(seconds: 90),
+  }) async {
+    final session = await _session(origin, userAgent);
+    final result = await session.controller
+        .callAsyncJavaScript(
+          functionBody: '''
+            try {
+              const binary = atob(data);
+              const bytes = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+              }
+              const form = new FormData();
+              for (const name of Object.keys(fields)) {
+                form.append(name, fields[name]);
+              }
+              form.append(field, new File([bytes], filename,
+                  { type: contentType }));
+              const res = await fetch(path, {
+                method: 'POST',
+                credentials: 'include',
+                cache: 'no-store',
+                headers: Object.assign({
+                  'Accept': 'application/json',
+                  'X-Requested-With': 'XMLHttpRequest',
+                  'Discourse-Present': 'true',
+                }, headers),
+                body: form,
+              });
+              const text = await res.text();
+              return { ok: true, status: res.status, body: text };
+            } catch (e) {
+              return { ok: false, status: 0, body: String(e) };
+            }
+          ''',
+          arguments: {
+            'path': path,
+            'data': base64Encode(bytes),
+            'field': field,
+            'filename': filename,
+            'contentType': contentType,
+            'fields': fields,
+            'headers': headers,
+          },
+        )
+        .timeout(timeout);
+
+    return _decode(result);
+  }
+
+  /// What the page answered, or the reason there is nothing to read.
+  Object? _decode(CallAsyncJavaScriptResult? result) {
     if (result == null || result.error != null) {
       throw WebViewFetchException(0, result?.error ?? '页面脚本没有返回结果');
     }
