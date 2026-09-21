@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -5,6 +7,15 @@ import '../app_theme.dart';
 import '../core/models.dart';
 import '../core/util.dart';
 import '../widgets/chrome.dart';
+
+/// How the reader got to the pictures they are putting in a reply.
+enum PictureSource {
+  /// Chosen out of a file dialog.
+  picked,
+
+  /// Whatever was on the clipboard when they pressed paste.
+  pasted,
+}
 
 /// The box at the foot of a thread, for sites that can be written to.
 ///
@@ -34,9 +45,10 @@ class ReplyBox extends StatefulWidget {
   final VoidCallback? onCancelTarget;
 
   /// Hands back what to write into the box for the pictures the reader
-  /// chooses — null when they choose none. Throws with what to tell them when
-  /// the forum will not take one. Null where the site takes no pictures.
-  final Future<String?> Function()? onAttach;
+  /// chose — null when there were none to choose. Throws with what to tell
+  /// them when the forum will not take one. Null where the site takes no
+  /// pictures, which is also what leaves paste alone.
+  final Future<String?> Function(PictureSource from)? onAttach;
 
   final String hint;
 
@@ -110,8 +122,8 @@ class _ReplyBoxState extends State<ReplyBox> {
     }
   }
 
-  /// Picks pictures, hands them over, and writes in what came back.
-  Future<void> _attach() async {
+  /// Finds pictures, hands them over, and writes in what came back.
+  Future<void> _attach(PictureSource from) async {
     final ask = widget.onAttach;
     if (ask == null || _busy) return;
     setState(() {
@@ -119,7 +131,7 @@ class _ReplyBoxState extends State<ReplyBox> {
       _problem = null;
     });
     try {
-      final written = await ask();
+      final written = await ask(from);
       if (!mounted) return;
       setState(() => _attaching = false);
       if (written != null && written.isNotEmpty) _insert(written);
@@ -132,19 +144,63 @@ class _ReplyBoxState extends State<ReplyBox> {
     }
   }
 
+  /// Takes ⌘V over, so that a picture on the clipboard can go to the forum
+  /// before it goes into the reply.
+  ///
+  /// This node sits under the shortcuts that turn ⌘V into a paste, so it is
+  /// asked first — and having said it took the key, it owes the field the
+  /// ordinary paste too, which [_paste] sees to. Nothing is decided here
+  /// because nothing can be: what is on the clipboard is a question for the
+  /// platform, and a key handler has to answer now.
+  KeyEventResult _pressed(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyV) {
+      return KeyEventResult.ignored;
+    }
+    final held = HardwareKeyboard.instance;
+    if (!held.isMetaPressed && !held.isControlPressed) {
+      return KeyEventResult.ignored;
+    }
+    // Nowhere for a picture to go, or nowhere for anything to go: the field
+    // can have the key back.
+    if (widget.onAttach == null || _sending) return KeyEventResult.ignored;
+    unawaited(_paste());
+    return KeyEventResult.handled;
+  }
+
+  /// What pressing paste does: a picture where there is one, the words
+  /// otherwise.
+  Future<void> _paste() async {
+    // Words win wherever there are any. A screenshot arrives on the clipboard
+    // on its own, while a link copied out of a browser arrives as text *and*
+    // as an address AppKit would gladly fetch and call a picture — and
+    // pasting a link should paste the link.
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
+    if (!mounted) return;
+    if (text.isNotEmpty) {
+      _write(text);
+      return;
+    }
+    await _attach(PictureSource.pasted);
+  }
+
   /// Writes [markdown] in where the cursor was, on a line of its own.
+  void _insert(String markdown) => _write(markdown, ownLine: true);
+
+  /// Writes [text] in over whatever was selected.
   ///
   /// Where the cursor was rather than at the end: someone who wrote a
   /// paragraph, went back up and then asked for a picture meant it there.
-  void _insert(String markdown) {
+  /// [ownLine] for a picture, which Discourse draws as a block and which
+  /// reads as one.
+  void _write(String text, {bool ownLine = false}) {
     final value = _text.value;
     final at = value.selection.isValid ? value.selection.start : value.text.length;
     final until = value.selection.isValid ? value.selection.end : value.text.length;
     final before = value.text.substring(0, at);
     final after = value.text.substring(until);
-    final lead = before.isEmpty || before.endsWith('\n') ? '' : '\n';
-    final trail = after.isEmpty || after.startsWith('\n') ? '' : '\n';
-    final written = '$lead$markdown$trail';
+    final lead = !ownLine || before.isEmpty || before.endsWith('\n') ? '' : '\n';
+    final trail = !ownLine || after.isEmpty || after.startsWith('\n') ? '' : '\n';
+    final written = '$lead$text$trail';
     _text.value = TextEditingValue(
       text: '$before$written$after',
       selection: TextSelection.collapsed(offset: before.length + written.length),
@@ -188,19 +244,25 @@ class _ReplyBoxState extends State<ReplyBox> {
                 const SingleActivator(LogicalKeyboardKey.enter, control: true):
                     _send,
               },
-              child: TextField(
-                controller: _text,
-                focusNode: _focus,
-                // Read-only rather than disabled while it is on its way.
-                // What was written has to stay both there and legible until
-                // the forum has taken it: Material paints a disabled field at
-                // 38% opacity, which on this canvas reads as the box having
-                // emptied itself the moment 发送 was pressed.
-                readOnly: _sending,
-                minLines: 1,
-                maxLines: 6,
-                style: const TextStyle(fontSize: 13, height: 1.45),
-                decoration: InputDecoration(hintText: widget.hint),
+              child: Focus(
+                onKeyEvent: _pressed,
+                // Somewhere for keys to pass through on their way up, never
+                // a stop of its own in the tab order.
+                canRequestFocus: false,
+                child: TextField(
+                  controller: _text,
+                  focusNode: _focus,
+                  // Read-only rather than disabled while it is on its way.
+                  // What was written has to stay both there and legible until
+                  // the forum has taken it: Material paints a disabled field at
+                  // 38% opacity, which on this canvas reads as the box having
+                  // emptied itself the moment 发送 was pressed.
+                  readOnly: _sending,
+                  minLines: 1,
+                  maxLines: 6,
+                  style: const TextStyle(fontSize: 13, height: 1.45),
+                  decoration: InputDecoration(hintText: widget.hint),
+                ),
               ),
             ),
           ),
@@ -219,10 +281,11 @@ class _ReplyBoxState extends State<ReplyBox> {
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : QuietIconButton(
                         icon: Icons.image_outlined,
-                        tooltip: '插入图片',
+                        tooltip: mac ? '插入图片（也可以 ⌘V 粘贴）' : '插入图片（也可以 Ctrl+V 粘贴）',
                         size: 16,
                         box: 30,
-                        onPressed: _sending ? null : _attach,
+                        onPressed:
+                            _sending ? null : () => _attach(PictureSource.picked),
                       ),
               ),
             ),

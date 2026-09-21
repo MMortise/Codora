@@ -226,14 +226,17 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
         author: reply.author?.name,
       ));
 
-  /// Picks pictures and hands them to the site, answering with what to write
-  /// into the box for them.
+  /// Finds the pictures the reader meant and hands them to the site,
+  /// answering with what to write into the box for them.
   ///
   /// One at a time rather than all at once: a forum counts uploads against a
   /// limit, and one that says no to the fourth should say so about the fourth
   /// rather than about whichever of four happened to be in flight.
-  Future<String?> _attach(UploadImage upload) async {
-    final picked = await pickPictures();
+  Future<String?> _attach(UploadImage upload, PictureSource from) async {
+    final picked = switch (from) {
+      PictureSource.picked => await pickPictures(),
+      PictureSource.pasted => [?await clipboardPicture()],
+    };
     if (picked.isEmpty) return null;
     final written = <String>[];
     for (final picture in picked) {
@@ -393,7 +396,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
             onCancelTarget: () => setState(() => _replyTo = null),
             onAttach: source.uploadImage == null
                 ? null
-                : () => _attach(source.uploadImage!),
+                : (from) => _attach(source.uploadImage!, from),
             onSend: (text) => _send(send, text),
           ),
     ]);

@@ -224,7 +224,7 @@ void main() {
   group('a picture in a reply', () {
     Future<void> pumpBox(
       WidgetTester tester,
-      Future<String?> Function()? onAttach, {
+      Future<String?> Function(PictureSource)? onAttach, {
       Future<void> Function(String)? onSend,
     }) =>
         pumpApp(
@@ -232,7 +232,7 @@ void main() {
             ReplyBox(onSend: onSend ?? (_) async {}, onAttach: onAttach),
             size: const Size(700, 400));
 
-    Finder pictureButton() => find.byTooltip('插入图片');
+    Finder pictureButton() => find.byTooltip(RegExp('^插入图片'));
 
     testWidgets('not offered by a site that takes none', (tester) async {
       await pumpBox(tester, null);
@@ -244,7 +244,7 @@ void main() {
         (tester) async {
       // Where the cursor was, not at the end: someone who wrote a paragraph,
       // went back up and asked for a picture meant it there.
-      await pumpBox(tester, () async => '![a.png|60x40](upload://abc.png)');
+      await pumpBox(tester, (_) async => '![a.png|60x40](upload://abc.png)');
       await tester.enterText(find.byType(TextField), '先写一句');
       final field =
           tester.widget<TextField>(find.byType(TextField)).controller!;
@@ -261,7 +261,7 @@ void main() {
     });
 
     testWidgets('into an empty box it is the whole of it', (tester) async {
-      await pumpBox(tester, () async => '![a.png](upload://abc.png)');
+      await pumpBox(tester, (_) async => '![a.png](upload://abc.png)');
       await tester.tap(pictureButton());
       await tester.pumpAndSettle();
       expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
@@ -270,7 +270,7 @@ void main() {
     });
 
     testWidgets('choosing none leaves what was written alone', (tester) async {
-      await pumpBox(tester, () async => null);
+      await pumpBox(tester, (_) async => null);
       await tester.enterText(find.byType(TextField), '说得好');
       await tester.pump();
       await tester.tap(pictureButton());
@@ -281,7 +281,7 @@ void main() {
 
     testWidgets('a refusal is the forum\'s own sentence, and nothing is written',
         (tester) async {
-      await pumpBox(tester, () async => throw Exception('图片太大了'));
+      await pumpBox(tester, (_) async => throw Exception('图片太大了'));
       await tester.enterText(find.byType(TextField), '说得好');
       await tester.pump();
       await tester.tap(pictureButton());
@@ -298,7 +298,7 @@ void main() {
       // where the picture was going to be.
       final answered = Completer<String?>();
       var sent = 0;
-      await pumpBox(tester, () => answered.future,
+      await pumpBox(tester, (_) => answered.future,
           onSend: (_) async => sent++);
       await tester.enterText(find.byType(TextField), '说得好');
       await tester.pump();
@@ -316,6 +316,103 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<FilledButton>(sendButton()).onPressed, isNotNull,
           reason: 'and goes again once the picture has landed');
+    });
+  });
+
+  group('pasting into the box', () {
+    /// Stands in for the clipboard's words. Null for a clipboard holding
+    /// something that is not text — a screenshot, which is the whole point.
+    void clipboardHolds(WidgetTester tester, String? text) {
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.getData') {
+          return text == null ? null : <String, dynamic>{'text': text};
+        }
+        return null;
+      });
+      addTearDown(() =>
+          messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    }
+
+    /// Control rather than the command key: the binding for the platform a
+    /// widget test says it is on. The box takes either.
+    Future<void> paste(WidgetTester tester) async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+    }
+
+    Future<TextEditingController> pumpBox(
+      WidgetTester tester, {
+      Future<String?> Function(PictureSource)? onAttach,
+    }) async {
+      await pumpApp(tester, ReplyBox(onSend: (_) async {}, onAttach: onAttach),
+          size: const Size(700, 400));
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
+      return tester.widget<TextField>(find.byType(TextField)).controller!;
+    }
+
+    testWidgets('a picture on the clipboard goes to the forum', (tester) async {
+      clipboardHolds(tester, null);
+      PictureSource? from;
+      final field = await pumpBox(tester, onAttach: (source) async {
+        from = source;
+        return '![clipboard.png|800x600](upload://abc.png)';
+      });
+
+      await paste(tester);
+
+      expect(from, PictureSource.pasted);
+      expect(field.text, '![clipboard.png|800x600](upload://abc.png)');
+    });
+
+    testWidgets('words on it are still just pasted', (tester) async {
+      // A link copied out of a browser is on the clipboard as text *and* as
+      // an address AppKit would gladly fetch and call a picture. Pasting a
+      // link should paste the link.
+      clipboardHolds(tester, 'https://linux.do/t/topic/1');
+      var asked = 0;
+      final field = await pumpBox(tester, onAttach: (_) async {
+        asked++;
+        return '![clipboard.png](upload://abc.png)';
+      });
+
+      await paste(tester);
+
+      expect(field.text, 'https://linux.do/t/topic/1');
+      expect(asked, 0, reason: 'nothing was uploaded');
+    });
+
+    testWidgets('and they land where the cursor was', (tester) async {
+      clipboardHolds(tester, '很好');
+      final field = await pumpBox(tester, onAttach: (_) async => null);
+      await tester.enterText(find.byType(TextField), '说得');
+      field.selection = const TextSelection.collapsed(offset: 1);
+      await tester.pump();
+
+      await paste(tester);
+      expect(field.text, '说很好得',
+          reason: 'no line of its own for words, unlike a picture');
+    });
+
+    testWidgets('a site that takes no pictures pastes as it always did',
+        (tester) async {
+      // Nothing is taken over there, so this is the field's own paste.
+      clipboardHolds(tester, '说得好');
+      final field = await pumpBox(tester);
+      await paste(tester);
+      expect(field.text, '说得好');
+    });
+
+    testWidgets('an empty clipboard writes nothing and says nothing',
+        (tester) async {
+      clipboardHolds(tester, null);
+      final field = await pumpBox(tester, onAttach: (_) async => null);
+      await paste(tester);
+      expect(field.text, isEmpty);
+      expect(find.byIcon(Icons.error_outline_rounded), findsNothing);
     });
   });
 
@@ -421,13 +518,13 @@ void main() {
         (tester) async {
       await pumpPane(tester,
           source: FakeSource(null, onReply: (_, t, {to}) async => _sent(t)));
-      expect(find.byTooltip('插入图片'), findsNothing);
+      expect(find.byTooltip(RegExp('^插入图片')), findsNothing);
 
       await pumpPane(tester,
           source: FakeSource(null,
               onReply: (_, t, {to}) async => _sent(t),
               onUpload: (name, bytes) async => '![$name](upload://a.png)'));
-      expect(find.byTooltip('插入图片'), findsOneWidget);
+      expect(find.byTooltip(RegExp('^插入图片')), findsOneWidget);
     });
 
     testWidgets('a reply to a thread that never loaded says so', (tester) async {

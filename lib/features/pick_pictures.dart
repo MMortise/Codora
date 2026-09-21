@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:pasteboard/pasteboard.dart';
 
 import '../core/util.dart';
 
@@ -23,4 +24,16 @@ Future<List<PickedPicture>> pickPictures() async {
   return [
     for (final file in files) (name: file.name, bytes: await file.readAsBytes()),
   ];
+}
+
+/// Whatever picture is on the clipboard, or null when there is none.
+///
+/// A screenshot is the reason this exists: macOS puts one on the clipboard as
+/// image data and nothing else, with no file and so no name — the name below
+/// is only what the forum will show if the picture ever fails to load. The
+/// bytes come back as PNG whatever form they were taken in.
+Future<PickedPicture?> clipboardPicture() async {
+  final bytes = await Pasteboard.image;
+  if (bytes == null || bytes.isEmpty) return null;
+  return (name: 'clipboard.png', bytes: bytes);
 }
