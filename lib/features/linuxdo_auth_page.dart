@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/material.dart';
@@ -123,6 +124,10 @@ class _LinuxDoAuthPageState extends ConsumerState<LinuxDoAuthPage> {
             ),
             initialUserScripts: UnmodifiableListView([_noPasskeys]),
             onWebViewCreated: (c) => _controller = c,
+            onCreateWindow: (c, action) async {
+              unawaited(_openWindow(action));
+              return true;
+            },
             onLoadStop: (c, url) async {
               if (url != null) setState(() => _url = url.toString());
               await _checkCookies();
@@ -135,6 +140,22 @@ class _LinuxDoAuthPageState extends ConsumerState<LinuxDoAuthPage> {
       ]),
     );
   }
+
+  /// Gives a page's pop-up a window of its own.
+  ///
+  /// Left to itself the WebView loads a pop-up over the page that opened it.
+  /// That is fatal to "Sign in with Google", which linux.do offers through
+  /// Google's own button: the account is chosen in a pop-up, and the pop-up
+  /// hands the result back to the page that opened it through
+  /// `window.opener`. Loaded in place, there is no opener left to hand it to,
+  /// and the pop-up stops on a blank `accounts.google.com/gsi/transform`
+  /// with the reader signed in to Google and not to the forum.
+  ///
+  /// The pop-up closes itself once it has answered, and this closes with it.
+  Future<void> _openWindow(CreateWindowAction action) => showDialog<void>(
+        context: context,
+        builder: (context) => _PopupWindow(action: action),
+      );
 
   String get _landing =>
       widget.signIn ? '$linuxdoOrigin/login' : '$linuxdoOrigin/';
@@ -171,6 +192,61 @@ class _LinuxDoAuthPageState extends ConsumerState<LinuxDoAuthPage> {
         s.copyWith(linuxdoCookie: header, linuxdoUserAgent: kDesktopUserAgent));
     ref.invalidate(sectionsProvider(SiteId.linuxdo));
     if (mounted) Navigator.of(context).pop(true);
+  }
+}
+
+/// A page's pop-up, opened by the page itself: see
+/// [_LinuxDoAuthPageState._openWindow].
+class _PopupWindow extends StatelessWidget {
+  const _PopupWindow({required this.action});
+
+  final CreateWindowAction action;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final host = action.request.url?.host ?? '';
+    return Dialog(
+      backgroundColor: p.panel,
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        width: 520,
+        height: 640,
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 6, 6),
+            child: Row(children: [
+              Expanded(
+                child: Text(host,
+                    style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              QuietIconButton(
+                icon: Icons.close_rounded,
+                tooltip: '关闭',
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ]),
+          ),
+          Expanded(
+            child: InAppWebView(
+              // The WebView WebKit already made for the pop-up, which is the
+              // one that still knows who opened it.
+              windowId: action.windowId,
+              initialSettings: InAppWebViewSettings(
+                userAgent: kDesktopUserAgent,
+                javaScriptEnabled: true,
+                sharedCookiesEnabled: true,
+              ),
+              initialUserScripts: UnmodifiableListView([_noPasskeys]),
+              onCloseWindow: (c) {
+                if (context.mounted) Navigator.of(context).pop();
+              },
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 }
 
