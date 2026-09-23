@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' show Size;
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 /// Fetches JSON from inside a real WebView.
@@ -12,7 +14,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 /// the very browser that passed the challenge sidesteps that: identical
 /// fingerprint, identical cookie jar.
 ///
-/// One hidden WebView is kept per origin and reused.
+/// One hidden WebView is kept per origin and reused. It opens a small static
+/// page on the origin rather than the site itself: see [_Session.start].
 class WebViewFetcher {
   WebViewFetcher._();
   static final instance = WebViewFetcher._();
@@ -323,21 +326,46 @@ class _Session {
   late final HeadlessInAppWebView _webView;
   late final InAppWebViewController controller;
 
+  /// What the document itself was answered with, once there is an answer.
+  int? _documentStatus;
+
   Future<void> get ready => _readyCompleter.future;
 
   Future<void> start() async {
     _webView = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri(origin.toString())),
+      // Requests only need a page on the right origin to run from. The home
+      // page is the whole forum app: it keeps a message-bus poll open, counts
+      // every new topic into the title and grows with them for as long as the
+      // app runs. A day of that held a WebContent process at 80% CPU and
+      // half a gigabyte. robots.txt is a few hundred bytes of text with no
+      // script, and bot protection leaves it alone by convention.
+      initialUrlRequest:
+          URLRequest(url: WebUri(origin.resolve(kDocumentPath).toString())),
+      // Nothing is displayed. The page is still put into the window, which is
+      // what keeps WebKit running its script, but it need not be window-sized.
+      initialSize: const Size(1, 1),
       initialSettings: InAppWebViewSettings(
         userAgent: userAgent,
         javaScriptEnabled: true,
         sharedCookiesEnabled: true,
-        // Nothing is displayed, so skip the work of painting the page.
         isElementFullscreenEnabled: false,
       ),
       onWebViewCreated: (c) => controller = c,
-      onLoadStop: (c, url) {
-        if (!_readyCompleter.isCompleted) _readyCompleter.complete();
+      onReceivedHttpError: (c, request, response) {
+        if (request.isForMainFrame ?? true) {
+          _documentStatus = response.statusCode;
+        }
+      },
+      onLoadStop: (c, url) async {
+        if (_readyCompleter.isCompleted) return;
+        final title = await c.getTitle();
+        if (_readyCompleter.isCompleted) return;
+        final refused = documentRefusal(_documentStatus, title);
+        if (refused != null) {
+          _readyCompleter.completeError(refused);
+        } else {
+          _readyCompleter.complete();
+        }
       },
       onReceivedError: (c, request, error) {
         if (!_readyCompleter.isCompleted) {
@@ -347,13 +375,39 @@ class _Session {
       },
     );
     await _webView.run();
-    await _readyCompleter.future.timeout(
-      const Duration(seconds: 40),
-      onTimeout: () => throw WebViewFetchException(0, '打开站点超时'),
-    );
+    try {
+      await _readyCompleter.future.timeout(
+        const Duration(seconds: 40),
+        onTimeout: () => throw WebViewFetchException(0, '打开站点超时'),
+      );
+    } catch (_) {
+      // Not left behind: a challenge page runs a script of its own until it
+      // is closed, and nothing would ever close this one.
+      await dispose();
+      rethrow;
+    }
   }
 
   Future<void> dispose() async {
     await _webView.dispose();
   }
+}
+
+/// The page every hidden WebView opens: see [_Session.start].
+@visibleForTesting
+const kDocumentPath = '/robots.txt';
+
+/// Why the page requests are run from cannot be used, or null when it can.
+///
+/// Only a challenge counts. Any other answer is still a document on the
+/// origin, and a same-origin `fetch` works from it all the same. A challenge
+/// is reported the way the requests themselves would have reported it — as
+/// the [WebViewFetchException] whose [WebViewFetchException.isChallenge] every
+/// caller already turns into "go through the check again" — and it has to be
+/// reported here, because the page it leaves open is not one to run anything
+/// from: its script can navigate away underneath a request at any moment.
+@visibleForTesting
+WebViewFetchException? documentRefusal(int? status, String? title) {
+  final answer = WebViewFetchException(status ?? 200, title ?? '');
+  return answer.isChallenge ? answer : null;
 }
