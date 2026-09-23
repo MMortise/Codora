@@ -88,6 +88,13 @@ class SettingsNotifier extends Notifier<AppSettings> {
         next.linuxdoUserAgent != prev.linuxdoUserAgent) {
       await applyLinuxDoCookies(next.linuxdoCookie);
       await WebViewFetcher.instance.reset(linuxdoOrigin);
+      // The new settings went out above, and with them the profile card set
+      // off to read who is signed in now — through the WebView just dropped
+      // under it, into the browser before it held the new credentials. Right
+      // after signing in, that read came back saying the sign-in had failed
+      // and the card kept saying so until its retry a minute later. It is
+      // asked again now that the browser is ready for it.
+      ref.invalidate(memberProvider(SiteId.linuxdo));
     }
   }
 }
