@@ -8,7 +8,7 @@
 PRODUCT_NAME = codora
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.codora.codora
+PRODUCT_BUNDLE_IDENTIFIER = com.mmortise.codora
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.codora. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 MMortise. All rights reserved.

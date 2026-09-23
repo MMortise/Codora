@@ -65,7 +65,7 @@ class _ImageViewer extends StatefulWidget {
 
 class _ImageViewerState extends State<_ImageViewer> {
   final _transform = TransformationController();
-  late Future<ImageProvider> _provider;
+  late final ImageProvider _provider;
   Size? _size;
   ViewerMode? _mode;
   bool _zoomed = false;
@@ -87,9 +87,8 @@ class _ImageViewerState extends State<_ImageViewer> {
   /// Reads the picture's real dimensions so the layout can be chosen for it.
   Future<void> _measure() async {
     try {
-      final provider = await _provider;
       final completer = Completer<Size>();
-      final stream = provider.resolve(ImageConfiguration.empty);
+      final stream = _provider.resolve(ImageConfiguration.empty);
       late ImageStreamListener listener;
       listener = ImageStreamListener(
         (info, _) {
@@ -181,7 +180,10 @@ class _ImageViewerState extends State<_ImageViewer> {
           final zoomed = _transform.value.getMaxScaleOnAxis() > 1.01;
           if (zoomed != _zoomed) setState(() => _zoomed = zoomed);
         },
-        child: Center(child: _image(fit: BoxFit.contain)),
+        // The viewer fills everything inside that padding and swallows any
+        // tap that lands on it, so the backdrop behind was unreachable: only
+        // the 72px margin round the edge ever closed anything.
+        child: DismissOutside(child: _image(fit: BoxFit.contain)),
       ),
     );
   }
@@ -191,38 +193,22 @@ class _ImageViewerState extends State<_ImageViewer> {
   Widget _buildScroll() {
     return LayoutBuilder(builder: (context, constraints) {
       final width = constraints.maxWidth.clamp(0.0, 900.0) * 0.62;
-      return GestureDetector(
-        // Taps land on the backdrop behind, so leaving stays easy.
-        onTap: () => Navigator.of(context).maybePop(),
-        behavior: HitTestBehavior.translucent,
-        child: Scrollbar(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(vertical: 64),
-            child: Center(
-              child: GestureDetector(
-                onTap: () {},
-                child: SizedBox(width: width, child: _image(fit: BoxFit.fitWidth)),
-              ),
-            ),
+      return Scrollbar(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(vertical: 64),
+          child: DismissOutside(
+            child: SizedBox(width: width, child: _image(fit: BoxFit.fitWidth)),
           ),
         ),
       );
     });
   }
 
-  Widget _image({required BoxFit fit}) {
-    return FutureBuilder<ImageProvider>(
-      future: _provider,
-      builder: (context, snap) {
-        if (!snap.hasData) return const SizedBox.shrink();
-        return Image(
-          image: snap.data!,
-          fit: fit,
-          errorBuilder: (_, _, _) => const BrokenImage(),
-        );
-      },
-    );
-  }
+  Widget _image({required BoxFit fit}) => Image(
+        image: _provider,
+        fit: fit,
+        errorBuilder: (_, _, _) => const BrokenImage(),
+      );
 
   Widget _buildActions(Palette p) {
     return Row(children: [
@@ -288,6 +274,29 @@ class _ImageViewerState extends State<_ImageViewer> {
       ),
     );
   }
+}
+
+/// Closes the route when tapped anywhere but on [child].
+///
+/// A picture fills only part of the window, and everything around it reads as
+/// backdrop — so it has to behave like backdrop. It cannot be left to the
+/// layer underneath: whatever presents the picture covers that layer and
+/// takes the taps with it.
+class DismissOutside extends StatelessWidget {
+  const DismissOutside({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: () => Navigator.of(context).maybePop(),
+        behavior: HitTestBehavior.opaque,
+        child: Center(
+          // The picture keeps its own taps: tapping the thing you opened
+          // should not close it.
+          child: GestureDetector(onTap: () {}, child: child),
+        ),
+      );
 }
 
 class _ViewerButton extends StatelessWidget {

@@ -5,6 +5,16 @@ import '../core/forum_source.dart';
 import 'image_viewer.dart';
 import 'site_image.dart';
 
+/// How tall a picture in a post may be drawn.
+///
+/// Width has always had a limit — the pane — and for a wide picture that is
+/// enough. A tall one has no such luck: a phone screenshot pasted into a
+/// reply is about twice as tall as it is wide, so filling the pane's width
+/// made it a thousand pixels of scrolling, and the reply it belonged to went
+/// missing between its top and its bottom. Nothing is cropped; it is drawn
+/// smaller, whole, and opens full size when it is tapped.
+const kPostImageMaxHeight = 420.0;
+
 /// The single way a picture appears inside a post body, so the HTML renderer
 /// and the Markdown renderer produce identical results: same corner radius,
 /// same loader, same placeholder when it cannot be reached.
@@ -16,11 +26,20 @@ class PostImage extends StatelessWidget {
     this.images = SiteImages.plain,
     this.rounded = true,
     this.fullUrl,
+    this.width,
+    this.height,
   });
 
   final Uri url;
   final String? alt;
   final SiteImages images;
+
+  /// What the page asked for, where it says. A picture that sits in the run
+  /// of text is usually served larger than it is meant to be drawn — a 24px
+  /// avatar comes as a 48px file — and left to its own size it would tower
+  /// over the line it belongs to.
+  final double? width;
+  final double? height;
 
   /// Inline emoji keep their own shape; clipping a 20px glyph would cut it.
   /// They are also not worth opening full screen.
@@ -35,6 +54,8 @@ class PostImage extends StatelessWidget {
     final image = SiteImage(
       url: url,
       images: images,
+      width: width,
+      height: height,
       fallback: BrokenImage(alt: alt),
     );
     if (!rounded) return image;
@@ -48,18 +69,24 @@ class PostImage extends StatelessWidget {
       // until it would exceed the pane, then shrinks to fit.
       child: Align(
         alignment: Alignment.centerLeft,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => showImageViewer(
-              context,
-              url: fullUrl ?? url,
-              alt: alt,
-              images: images,
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(Radii.image),
-              child: image,
+        // A ceiling on the height, which the width already had. Bounding both
+        // is also what makes the picture keep its shape: given two bounds it
+        // scales down whole, rather than being squeezed in one direction.
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: kPostImageMaxHeight),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => showImageViewer(
+                context,
+                url: fullUrl ?? url,
+                alt: alt,
+                images: images,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(Radii.image),
+                child: image,
+              ),
             ),
           ),
         ),

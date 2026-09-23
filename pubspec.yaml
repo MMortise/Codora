@@ -44,6 +44,10 @@ dependencies:
   window_manager: ^0.5.2
   markdown: ^7.3.1
   flutter_markdown_plus: ^1.0.12
+  path_provider: ^2.1.6
+  crypto: ^3.0.7
+  file_selector: ^1.1.0
+  pasteboard: ^0.5.0
 
 dev_dependencies:
   flutter_test:

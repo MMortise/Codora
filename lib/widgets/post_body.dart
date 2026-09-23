@@ -92,13 +92,9 @@ class _HtmlBody extends StatelessWidget {
           return {'display': 'none'};
         }
         switch (el.localName) {
-          case 'pre':
-            return {
-              'background-color': hex(p.raised),
-              'padding': '12px 14px',
-              'margin': '10px 0',
-              'font-size': '12.5px',
-            };
+          // `pre` has no case here: it is built as a widget below, because a
+          // style cannot undo the horizontal scroll view this renderer puts
+          // one in.
           case 'code':
             return {'background-color': hex(p.raised), 'font-size': '12.5px'};
           case 'blockquote':
@@ -126,11 +122,45 @@ class _HtmlBody extends StatelessWidget {
       // Every picture goes through PostImage so it gets the same corner
       // radius and placeholder as one written in Markdown.
       customWidgetBuilder: (el) {
+        // A block of preformatted text, wrapped rather than run off the side
+        // of the pane. This renderer hands `pre` to a horizontal scroll view,
+        // which is right for a listing of code and wrong for the thing people
+        // actually do with these — a whole V2EX post written inside one came
+        // out as a single line per paragraph, reachable only by dragging
+        // sideways inside a pane that scrolls the other way.
+        if (el.localName == 'pre') {
+          return Container(
+            width: double.infinity,
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: p.raised,
+              borderRadius: BorderRadius.circular(Radii.image),
+            ),
+            child: CodeText(el.text, fontSize: parent.fontSize),
+          );
+        }
         if (el.localName != 'img') return null;
         final src = el.attributes['src'];
         if (src == null || src.isEmpty) return null;
         final uri = Uri.tryParse(src);
         if (uri == null) return null;
+        // A picture that belongs in the run of text has to say so, or the
+        // renderer puts it on a line of its own: the little face Discourse
+        // shows in front of the name it is quoting ended up above that name
+        // instead of beside it, at twice the size besides.
+        if (_inlineImage(el)) {
+          return InlineCustomWidget(
+            alignment: PlaceholderAlignment.middle,
+            child: PostImage(
+              url: parent._resolve(uri),
+              alt: el.attributes['alt'],
+              images: parent.images,
+              rounded: false,
+              width: _asked(el, 'width') ?? parent.fontSize,
+              height: _asked(el, 'height') ?? parent.fontSize,
+            ),
+          );
+        }
         return PostImage(
           url: parent._resolve(uri),
           // Discourse shows a resized copy and links the original from the
@@ -138,11 +168,24 @@ class _HtmlBody extends StatelessWidget {
           fullUrl: parent._lightboxTarget(el),
           alt: el.attributes['alt'],
           images: parent.images,
-          rounded: !el.className.contains('emoji'),
         );
       },
     );
   }
+}
+
+/// The classes Discourse gives a picture that lives inside a sentence: the
+/// face in front of a quoted name, an emoji, the favicon on a link preview.
+/// None of them is worth a line, and none of them is worth opening.
+const _inlineImageClasses = {'avatar', 'emoji', 'site-icon'};
+
+bool _inlineImage(dom.Element el) =>
+    el.classes.any(_inlineImageClasses.contains);
+
+/// The size the page asked for, when it says.
+double? _asked(dom.Element el, String attribute) {
+  final value = double.tryParse(el.attributes[attribute] ?? '');
+  return value == null || value <= 0 ? null : value;
 }
 
 class _MarkdownBody extends StatelessWidget {
@@ -154,13 +197,7 @@ class _MarkdownBody extends StatelessWidget {
     final p = context.palette;
     final size = parent.fontSize;
     final body = TextStyle(fontSize: size, height: 1.65, color: p.ink);
-    final mono = TextStyle(
-      fontFamily: 'Menlo',
-      fontFamilyFallback: const ['Consolas', 'monospace'],
-      fontSize: size - 2.5,
-      height: 1.5,
-      color: p.ink,
-    );
+    final mono = monoStyle(p, size);
 
     return MarkdownBody(
       data: parent.content,
@@ -169,7 +206,11 @@ class _MarkdownBody extends StatelessWidget {
       // The markdown package wires a tap recognizer to links but never sets a
       // cursor, so they look like plain text on hover. The HTML renderer does
       // this itself; this brings the two in line.
-      builders: {'a': _MarkdownLink(parent)},
+      // `pre` for the same reason as in the HTML renderer: this one wraps a
+      // code block in a horizontal scroll view too, and a builder is what
+      // takes precedence over it. The decoration around it still comes from
+      // the style sheet below.
+      builders: {'a': _MarkdownLink(parent), 'pre': _MarkdownCode(size)},
       imageBuilder: (uri, title, alt) => PostImage(
         url: parent._resolve(uri),
         alt: alt,
@@ -177,7 +218,10 @@ class _MarkdownBody extends StatelessWidget {
       ),
       styleSheet: MarkdownStyleSheet(
         p: body,
-        a: TextStyle(fontSize: size, color: p.accent),
+        // The same line height as the paragraph it sits in. The HTML
+        // renderer inherits it; this one was setting a style from scratch and
+        // quietly leaving a link on a different metric from its own sentence.
+        a: TextStyle(fontSize: size, height: 1.65, color: p.accent),
         em: body.copyWith(fontStyle: FontStyle.italic),
         strong: body.copyWith(fontWeight: FontWeight.w600),
         del: body.copyWith(decoration: TextDecoration.lineThrough),
@@ -220,6 +264,58 @@ class _MarkdownBody extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The face code is set in, wherever it appears and whichever renderer put
+/// it there.
+TextStyle monoStyle(Palette p, double size) => TextStyle(
+      fontFamily: 'Menlo',
+      fontFamilyFallback: const ['Consolas', 'monospace'],
+      fontSize: size - 2.5,
+      height: 1.5,
+      color: p.ink,
+    );
+
+/// The contents of a preformatted block, wrapped.
+///
+/// The line breaks are what carry the shape of the thing — a numbered list,
+/// a stanza, a stack trace — so they are kept; what gives is the long line,
+/// which wraps instead of running off the edge. Telling the renderer
+/// `white-space: normal` would have wrapped it by throwing those breaks away,
+/// which is the one part that cannot be reconstructed.
+class CodeText extends StatelessWidget {
+  const CodeText(this.text, {super.key, required this.fontSize});
+
+  final String text;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        // The same inset the markdown style sheet gives a code block, so the
+        // two renderers cannot drift apart.
+        padding: const EdgeInsets.all(14),
+        child: Text(_trimmed, style: monoStyle(context.palette, fontSize)),
+      );
+
+  /// HTML ignores a newline straight after `<pre>`, and a block almost always
+  /// ends with one before the closing tag. Kept, they read as blank lines the
+  /// author did not write.
+  String get _trimmed {
+    var out = text;
+    if (out.startsWith('\n')) out = out.substring(1);
+    return out.trimRight();
+  }
+}
+
+/// Draws a markdown code block so a long line wraps rather than scrolling.
+class _MarkdownCode extends MarkdownElementBuilder {
+  _MarkdownCode(this.fontSize);
+
+  final double fontSize;
+
+  @override
+  Widget? visitText(md.Text text, TextStyle? preferredStyle) =>
+      CodeText(text.text, fontSize: fontSize);
 }
 
 /// Draws a markdown link so it announces itself on hover.

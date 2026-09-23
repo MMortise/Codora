@@ -10,10 +10,13 @@ import '../core/util.dart';
 import '../widgets/avatar.dart';
 import '../widgets/chrome.dart';
 import '../widgets/error_view.dart';
+import '../widgets/like_button.dart';
 import '../widgets/post_body.dart';
 import '../widgets/relative_time.dart';
 import '../widgets/swap.dart';
+import 'pick_pictures.dart';
 import 'providers.dart';
+import 'reply_box.dart';
 
 /// Right-hand pane in the wide layout.
 class DetailPane extends ConsumerWidget {
@@ -149,6 +152,11 @@ class TopicDetailView extends ConsumerStatefulWidget {
 class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
   final _scroll = ScrollController();
 
+  /// Which post the box is aimed at, where the reader picked one out of the
+  /// thread. Null means the thread itself, which is what a forum takes when
+  /// nothing says otherwise.
+  ReplyTarget? _replyTo;
+
   /// Below this the button would scroll almost nowhere, so it stays hidden.
   static const _showTopButtonAfter = 400.0;
   bool _canScrollUp = false;
@@ -191,6 +199,71 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
   void _reload() {
     ref.invalidate(topicDetailProvider(widget.topic));
     ref.invalidate(repliesProvider(widget.topic));
+  }
+
+  /// Likes a post, or takes the like back, and tells the thread about it.
+  ///
+  /// The opening post is not in the thread's list — it comes from its own
+  /// provider — so only a reply is written back; the button there keeps what
+  /// the forum answered until the topic is loaded again.
+  Future<LikeState> _like(
+    ActOnLike act,
+    String postId,
+    bool wanted, {
+    String? replyId,
+  }) async {
+    final state = await act(postId, like: wanted);
+    if (replyId != null) {
+      ref.read(repliesProvider(widget.topic).notifier).replaceLike(replyId, state);
+    }
+    return state;
+  }
+
+  /// Aims the box at one post. The box takes the cursor from there.
+  void _answer(Reply reply) => setState(() => _replyTo = ReplyTarget(
+        postId: reply.id,
+        floor: reply.floor,
+        author: reply.author?.name,
+      ));
+
+  /// Finds the pictures the reader meant and hands them to the site,
+  /// answering with what to write into the box for them.
+  ///
+  /// One at a time rather than all at once: a forum counts uploads against a
+  /// limit, and one that says no to the fourth should say so about the fourth
+  /// rather than about whichever of four happened to be in flight.
+  Future<String?> _attach(UploadImage upload, PictureSource from) async {
+    final picked = switch (from) {
+      PictureSource.picked => await pickPictures(),
+      PictureSource.pasted => [?await clipboardPicture()],
+    };
+    if (picked.isEmpty) return null;
+    final written = <String>[];
+    for (final picture in picked) {
+      written.add(await upload(picture.name, picture.bytes));
+    }
+    return written.join('\n');
+  }
+
+  /// Sends a reply and puts it at the end of the thread.
+  ///
+  /// Anything thrown here is the forum explaining why it refused, and the box
+  /// is what shows it — so it is left to travel back rather than caught.
+  Future<void> _send(SendReply send, String text) async {
+    final posted = await send(widget.topic.id, text, to: _replyTo);
+    // It went, so the box is answering the thread again.
+    if (mounted) setState(() => _replyTo = null);
+    if (!ref.read(repliesProvider(widget.topic).notifier).appendSent(posted)) {
+      ref.invalidate(repliesProvider(widget.topic));
+      return;
+    }
+    // Their own reply is the one thing they want to see, and it is at the
+    // bottom. The list grows this frame, so the move waits for the next one.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(_scroll.position.maxScrollExtent,
+          duration: Motion.swap, curve: Motion.curve);
+    });
   }
 
   @override
@@ -262,7 +335,17 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(30, 26, 30, 0),
                   sliver: SliverToBoxAdapter(
-                      child: PostHeader(detail: d, images: _images)),
+                    child: PostHeader(
+                      detail: d,
+                      images: _images,
+                      // Only a site that says who may like what, and only a
+                      // post it numbers apart from its thread.
+                      onLike: source.like == null || d.postId == null
+                          ? null
+                          : (wanted) =>
+                              _like(source.like!, d.postId!, wanted),
+                    ),
+                  ),
                 ),
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(30, 0, 30, 20),
@@ -280,25 +363,42 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
                 ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(30, 6, 30, 4),
+                    padding: const EdgeInsets.fromLTRB(30, 10, 30, 2),
+                    // Two rules of equal flex put the count in the middle of
+                    // the pane, reading as the seam between the post and the
+                    // thread rather than as a heading over it.
                     child: Row(children: [
+                      Expanded(child: Container(height: 1, color: p.line)),
+                      const SizedBox(width: 14),
                       Text(_repliesTitle(d, replies.valueOrNull),
                           style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
                               color: p.inkMuted)),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 14),
                       Expanded(child: Container(height: 1, color: p.line)),
                     ]),
                   ),
                 ),
-                ..._replySlivers(replies, source.homeUrl),
+                ..._replySlivers(replies, source),
                 const SliverToBoxAdapter(child: SizedBox(height: 36)),
               ],
             ),
           ),
         ),
       ),
+      // Only where there is somewhere for it to go: a site the app can write
+      // to, signed in, and a post that actually loaded.
+      if (detail.hasValue)
+        if (source.reply case final send?)
+          ReplyBox(
+            to: _replyTo,
+            onCancelTarget: () => setState(() => _replyTo = null),
+            onAttach: source.uploadImage == null
+                ? null
+                : (from) => _attach(source.uploadImage!, from),
+            onSend: (text) => _send(send, text),
+          ),
     ]);
   }
 
@@ -308,7 +408,10 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     return n == 0 ? '还没有回复' : '$n 条回复';
   }
 
-  List<Widget> _replySlivers(AsyncValue<RepliesState> replies, Uri baseUrl) {
+  List<Widget> _replySlivers(
+      AsyncValue<RepliesState> replies, ForumSource source) {
+    final baseUrl = source.homeUrl;
+    final act = source.like;
     return replies.when(
       loading: () => const [
         SliverToBoxAdapter(
@@ -328,12 +431,21 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
       ],
       data: (r) => [
         SliverList.builder(
-          itemCount: r.items.length,
+          // `all` rather than the page: a reply written here sits at the end
+          // of the thread, where its writer left it.
+          itemCount: r.all.length,
           itemBuilder: (context, i) => ReplyTile(
-            reply: r.items[i],
+            first: i == 0,
+            reply: r.all[i],
             baseUrl: baseUrl,
             onTopicLink: _handleLink,
             images: _images,
+            onLike: act == null
+                ? null
+                : (wanted) =>
+                    _like(act, r.all[i].id, wanted, replyId: r.all[i].id),
+            onReply:
+                source.reply == null ? null : () => _answer(r.all[i]),
           ),
         ),
         SliverToBoxAdapter(
@@ -367,10 +479,18 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
 
 /// Title, author and stats above a post body.
 class PostHeader extends StatelessWidget {
-  const PostHeader(
-      {super.key, required this.detail, this.images = SiteImages.plain});
+  const PostHeader({
+    super.key,
+    required this.detail,
+    this.images = SiteImages.plain,
+    this.onLike,
+  });
   final TopicDetail detail;
   final SiteImages images;
+
+  /// Null where the site has no likes to give, or the reader is not signed
+  /// in to give one.
+  final Future<LikeState> Function(bool like)? onLike;
 
   @override
   Widget build(BuildContext context) {
@@ -389,7 +509,18 @@ class PostHeader extends StatelessWidget {
           if (detail.sectionLabel != null) Pill(label: detail.sectionLabel!),
           if (detail.viewCount != null)
             Pill(label: '${compactCount(detail.viewCount)} 阅读'),
-          if (detail.likeCount != null)
+          if (onLike case final act?)
+            LikeButton(
+              pill: true,
+              state: LikeState(
+                count: detail.likeCount ?? 0,
+                liked: detail.liked,
+                canLike: detail.canLike,
+                canUnlike: detail.canUnlike,
+              ),
+              onLike: act,
+            )
+          else if (detail.likeCount != null)
             Pill(label: '${compactCount(detail.likeCount)} 赞', tone: p.cream),
         ];
         return Wrap(
@@ -461,6 +592,9 @@ class ReplyTile extends StatelessWidget {
     required this.onTopicLink,
     this.images = SiteImages.plain,
     this.nested = false,
+    this.first = false,
+    this.onLike,
+    this.onReply,
   });
 
   final Reply reply;
@@ -468,6 +602,18 @@ class ReplyTile extends StatelessWidget {
   final bool Function(Uri) onTopicLink;
   final SiteImages images;
   final bool nested;
+
+  /// Null where the site has no likes to give, or the reader is not signed
+  /// in to give one.
+  final Future<LikeState> Function(bool like)? onLike;
+
+  /// Aims the box at the foot of the thread at this reply. Null where the
+  /// thread cannot be answered at all.
+  final VoidCallback? onReply;
+
+  /// The first reply in the thread, which the count's own rule already sits
+  /// above — a border here would draw a second line right under it.
+  final bool first;
 
   @override
   Widget build(BuildContext context) {
@@ -498,10 +644,30 @@ class ReplyTile extends StatelessWidget {
             RelativeTime(reply.createdAt),
           ]),
         ),
-        if (reply.likeCount != null && reply.likeCount! > 0) ...[
+        if (onLike case final act?) ...[
+          const SizedBox(width: 10),
+          LikeButton(
+            state: LikeState(
+              count: reply.likeCount ?? 0,
+              liked: reply.liked,
+              canLike: reply.canLike,
+              canUnlike: reply.canUnlike,
+            ),
+            onLike: act,
+          ),
+        ] else if (reply.likeCount != null && reply.likeCount! > 0) ...[
           const SizedBox(width: 10),
           Text('${reply.likeCount} 赞',
               style: TextStyle(fontSize: 11.5, color: p.cream)),
+        ],
+        if (onReply case final answer?) ...[
+          const SizedBox(width: 2),
+          QuietIconButton(
+              icon: Icons.reply_rounded,
+              tooltip: '回复 TA',
+              size: 13,
+              box: 24,
+              onPressed: answer),
         ],
         if (reply.floor != null) ...[
           const SizedBox(width: 10),
@@ -555,7 +721,7 @@ class ReplyTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(30, 16, 30, 16),
       decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: p.line)),
+        border: first ? null : Border(top: BorderSide(color: p.line)),
       ),
       child: body,
     );

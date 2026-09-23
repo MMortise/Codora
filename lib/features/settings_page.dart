@@ -6,13 +6,16 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
 import '../core/forum_source.dart';
+import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/proxy.dart';
-import '../core/read_log.dart';
 import '../core/settings.dart';
+import '../core/util.dart';
+import '../sources/v2ex_source.dart';
 import '../widgets/chrome.dart';
 import '../widgets/site_icon.dart';
 import '../widgets/swap.dart';
+import 'cache_panel.dart';
 import 'linuxdo_auth_page.dart';
 import 'providers.dart';
 
@@ -81,27 +84,48 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 )
               : null,
           onOpenBrowser: source.id == SiteId.linuxdo && !Platform.isLinux
-              ? () => _openBrowser(source.id)
+              ? () => _openBrowser(source.id,
+                  // Past the challenge and anonymous: take them straight to
+                  // the form instead of the front page they have to find it
+                  // from.
+                  signIn: source.access.level == AccessLevel.limited)
+              : null,
+          onSignOut: source.id == SiteId.linuxdo && settings.linuxdoLoggedIn
+              ? () => _signOutOfLinuxDo(notifier)
               : null,
           onClear: _clearFor(source, settings, notifier),
         ),
     ];
   }
 
-  Future<void> _openBrowser(SiteId site) async {
+  Future<void> _openBrowser(SiteId site, {bool signIn = false}) async {
     final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
-        fullscreenDialog: true, builder: (_) => const LinuxDoAuthPage()));
+        fullscreenDialog: true,
+        builder: (_) => LinuxDoAuthPage(signIn: signIn)));
     if (ok == true) _reload(site);
+  }
+
+  /// Ends the session without throwing away the Cloudflare clearance: reading
+  /// anonymously still needs it, and earning it again is the slow part.
+  Future<void> _signOutOfLinuxDo(SettingsNotifier notifier) async {
+    await signOutOfLinuxDo();
+    await notifier.patch((s) => s.withLinuxdoSignedOut());
+    if (mounted) _reload(SiteId.linuxdo);
   }
 
   VoidCallback? _clearFor(
       ForumSource source, AppSettings s, SettingsNotifier notifier) {
     return switch (source.id) {
+      // The browser is where this credential actually lives. Emptying the
+      // stored header alone would leave the feed signed in to an account the
+      // app no longer believes it has — 清除凭据 means all of it, the
+      // challenge included. 退出登录, beside it, is the one that keeps that.
       SiteId.linuxdo => s.linuxdoCookie.isEmpty
           ? null
-          : () {
-              notifier.patch((v) => v.copyWith(linuxdoCookie: ''));
-              _reload(source.id);
+          : () async {
+              await clearLinuxDoCookies();
+              await notifier.patch((v) => v.copyWith(linuxdoCookie: ''));
+              if (mounted) _reload(source.id);
             },
       SiteId.v2ex => s.v2exToken.isEmpty
           ? null
@@ -144,7 +168,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ],
       SiteId.linuxdo => [
           SettingField(
-            label: 'Cookie（需包含 cf_clearance）',
+            // The clearance is the one cookie worth *not* pasting: it belongs
+            // to the browser that earned it. What this is for is a sign-in
+            // the embedded browser cannot perform — a passkey, or a provider
+            // that refuses to run inside a WebView.
+            label: 'Cookie（从别的浏览器带一个已登录的 _t 进来）',
             value: s.linuxdoCookie,
             lines: 3,
             advanced: true,
@@ -165,8 +193,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   // ---------- 常规 ----------
 
   List<Widget> _general(AppSettings settings, SettingsNotifier notifier) {
-    final readLog = ref.watch(readLogProvider);
     return [
+      const CachePanel(),
       Panel(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
         margin: const EdgeInsets.only(bottom: 12),
@@ -191,30 +219,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ]),
         ]),
       ),
-      Panel(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-        margin: const EdgeInsets.only(bottom: 12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('阅读记录', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 4),
-          Text(
-            readLog.length == 0
-                ? '还没有读过的帖子。读过的帖子会在列表里变暗。'
-                : '记住了 ${readLog.length} 篇读过的帖子，最多保留 ${ReadLog.limit} 篇。',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: kControlHeight,
-            child: OutlinedButton(
-              onPressed: readLog.length == 0
-                  ? null
-                  : () => ref.read(readLogProvider.notifier).clear(),
-              child: const Text('清除阅读记录'),
-            ),
-          ),
-        ]),
-      ),
     ];
   }
 
@@ -225,6 +229,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 }
 
 /// The two halves of the page, as one segmented control.
+///
+/// The selection is a single pill that slides between the tabs rather than a
+/// fill that jumps from one to the other, so the eye follows it across instead
+/// of having to find it again.
 class _Tabs extends StatelessWidget {
   const _Tabs({required this.current, required this.onSelect});
 
@@ -234,6 +242,9 @@ class _Tabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
+    const tabs = SettingsTab.values;
+    final index = tabs.indexOf(current);
+
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -243,26 +254,103 @@ class _Tabs extends StatelessWidget {
           borderRadius: BorderRadius.circular(Radii.block + 4),
           border: Border.all(color: p.line),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          for (final tab in SettingsTab.values)
-            _Choice(
-              label: tab.label,
-              selected: tab == current,
-              onTap: () => onSelect(tab),
-              idle: Colors.transparent,
-              height: kControlHeight - 6,
-              padding: 26,
-              fontSize: 13.5,
+        // The row sizes the strip; the pill is laid over it at a fraction of
+        // that width, which keeps the two in step whatever the labels say.
+        child: IntrinsicWidth(
+          child: Stack(children: [
+            Positioned.fill(
+              child: AnimatedAlign(
+                duration: Motion.swap,
+                curve: Motion.curve,
+                alignment: Alignment(
+                    tabs.length == 1 ? 0 : -1 + 2 * index / (tabs.length - 1),
+                    0),
+                child: FractionallySizedBox(
+                  widthFactor: 1 / tabs.length,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: p.accent,
+                      borderRadius: BorderRadius.circular(Radii.block),
+                    ),
+                  ),
+                ),
+              ),
             ),
-        ]),
+            Row(children: [
+              for (final tab in tabs)
+                Expanded(
+                  child: _TabLabel(
+                    label: tab.label,
+                    selected: tab == current,
+                    onTap: () => onSelect(tab),
+                  ),
+                ),
+            ]),
+          ]),
+        ),
       ),
     );
   }
 }
 
-/// V2EX's proxy block: where to send its traffic, and whether the pictures
-/// posts link to go the same way.
-class _V2exProxy extends StatelessWidget {
+/// One tab's label. The fill behind it belongs to the sliding pill, so this
+/// paints only its own hover state and lets its colour cross-fade.
+class _TabLabel extends StatefulWidget {
+  const _TabLabel({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_TabLabel> createState() => _TabLabelState();
+}
+
+class _TabLabelState extends State<_TabLabel> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: Motion.quick,
+          curve: Motion.curve,
+          height: kControlHeight - 6,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 26),
+          decoration: BoxDecoration(
+            // Hovering the selected tab would only paint over its own pill.
+            color: !widget.selected && _hover ? p.raised : Colors.transparent,
+            borderRadius: BorderRadius.circular(Radii.block),
+          ),
+          child: AnimatedDefaultTextStyle(
+            duration: Motion.swap,
+            curve: Motion.curve,
+            style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: widget.selected ? p.accentInk : p.inkMuted),
+            child: Text(widget.label),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// V2EX's proxy block: where to send its traffic, whether the pictures posts
+/// link to go the same way, and a way to find out whether any of it works.
+class _V2exProxy extends StatefulWidget {
   const _V2exProxy({
     required this.settings,
     required this.notifier,
@@ -274,8 +362,51 @@ class _V2exProxy extends StatelessWidget {
   final VoidCallback onChanged;
 
   @override
+  State<_V2exProxy> createState() => _V2exProxyState();
+}
+
+class _V2exProxyState extends State<_V2exProxy> {
+  _ProbeResult? _result;
+  bool _running = false;
+
+  /// Tries the address that is on screen, saved or not.
+  ///
+  /// Trying the saved one instead would make the button useless for the thing
+  /// it is most wanted for — finding out whether an address works before
+  /// committing the forum to it.
+  Future<void> _test(String address) async {
+    final typed = address.trim();
+    // An address the app cannot read is not a route to test: the source would
+    // quietly fall back to a direct connection and report on that instead.
+    if (typed.isNotEmpty && SiteProxy.parse(typed) == null) {
+      setState(() => _result = const _ProbeResult.bad('这个地址读不出来，没法测'));
+      return;
+    }
+    setState(() {
+      _running = true;
+      _result = null;
+    });
+    final source = V2exSource(proxy: typed);
+    _ProbeResult outcome;
+    try {
+      outcome = _ProbeResult.ok(await source.probe(), viaProxy: typed.isNotEmpty);
+    } catch (e) {
+      outcome = _ProbeResult.bad(errorText(e));
+    } finally {
+      source.close();
+    }
+    if (!mounted) return;
+    setState(() {
+      _running = false;
+      // Whether it is still the address on screen decides how the result is
+      // worded, so it is settled now rather than when it is drawn.
+      _result = outcome.against(widget.settings.v2exProxy.trim(), typed);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final typed = settings.v2exProxy.trim();
+    final typed = widget.settings.v2exProxy.trim();
     final proxy = SiteProxy.parse(typed);
     final hasProxy = proxy != null;
 
@@ -288,19 +419,24 @@ class _V2exProxy extends StatelessWidget {
       Text(
         '能直连就留空。填上以后 V2EX 的接口、网页和图片都从这里走。'
         '常见的是本机或局域网的代理，写成 127.0.0.1:7890 这样的地址就行；'
-        '如果用的是替你转发的服务，用 {url} 或 {encoded_url} 指明目标地址放在哪。',
+        '如果用的是替你转发的服务，用 {url} 或 {encoded_url} 指明目标地址放在哪。'
+        '拿不准就按「测试」，它会照着框里的地址真的请求一次 V2EX。',
         style: Theme.of(context).textTheme.bodySmall,
       ),
       const SizedBox(height: 14),
       _FieldRow(
         field: SettingField(
           label: '代理地址',
-          value: settings.v2exProxy,
+          value: widget.settings.v2exProxy,
           secret: false,
           onSave: (v) {
-            notifier.patch((x) => x.copyWith(v2exProxy: v.trim()));
-            onChanged();
+            widget.notifier.patch((x) => x.copyWith(v2exProxy: v.trim()));
+            widget.onChanged();
           },
+        ),
+        action: (read) => OutlinedButton(
+          onPressed: _running ? null : () => _test(read()),
+          child: Text(_running ? '测试中' : '测试'),
         ),
       ),
       if (typed.isNotEmpty && proxy == null) ...[
@@ -311,6 +447,10 @@ class _V2exProxy extends StatelessWidget {
                 .bodySmall
                 ?.copyWith(color: context.palette.rose)),
       ],
+      if (_running || _result != null) ...[
+        const SizedBox(height: 10),
+        _ProbeLine(running: _running, result: _result),
+      ],
       const SizedBox(height: 14),
       _ToggleRow(
         title: '图片也走代理',
@@ -319,10 +459,83 @@ class _V2exProxy extends StatelessWidget {
         subtitle: hasProxy
             ? '帖子里的图片和头像也通过代理加载，包括 v2ex.com 以外的图床。'
             : '先填一个能用的代理地址，才能让图片也走代理。',
-        value: hasProxy && settings.v2exProxyImages,
+        value: hasProxy && widget.settings.v2exProxyImages,
         onChanged: hasProxy
-            ? (v) => notifier.patch((x) => x.copyWith(v2exProxyImages: v))
+            ? (v) => widget.notifier.patch((x) => x.copyWith(v2exProxyImages: v))
             : null,
+      ),
+    ]);
+  }
+}
+
+/// What one press of 测试 found.
+class _ProbeResult {
+  const _ProbeResult.ok(this.took, {this.viaProxy = false})
+      : problem = null,
+        unsaved = false;
+  const _ProbeResult.bad(this.problem)
+      : took = null,
+        viaProxy = false,
+        unsaved = false;
+  const _ProbeResult._(this.took, this.problem, this.viaProxy, this.unsaved);
+
+  final Duration? took;
+  final String? problem;
+
+  /// Whether the route tested went through an address at all, so a working
+  /// direct connection is not reported as a working proxy.
+  final bool viaProxy;
+
+  /// Whether the address tried is not the one the forum is currently using.
+  final bool unsaved;
+
+  bool get ok => problem == null;
+
+  _ProbeResult against(String saved, String tried) =>
+      _ProbeResult._(took, problem, viaProxy, saved != tried);
+
+  String get sentence {
+    if (problem != null) return problem!;
+    final ms = took!.inMilliseconds;
+    return '${viaProxy ? '经代理连上了 V2EX' : '直连 V2EX 没问题'} · $ms ms';
+  }
+}
+
+class _ProbeLine extends StatelessWidget {
+  const _ProbeLine({required this.running, required this.result});
+
+  final bool running;
+  final _ProbeResult? result;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final small = Theme.of(context).textTheme.bodySmall;
+    if (running || result == null) {
+      return Row(children: [
+        SizedBox(
+          width: 12,
+          height: 12,
+          child: CircularProgressIndicator(strokeWidth: 2, color: p.inkFaint),
+        ),
+        const SizedBox(width: 8),
+        Text('正在按这个地址请求 V2EX…', style: small),
+      ]);
+    }
+    final r = result!;
+    final tone = r.ok ? p.mint : p.rose;
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(r.ok ? Icons.check_circle_outline_rounded : Icons.error_outline_rounded,
+          size: 14, color: tone),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          // Saying which address was tried matters most when it is not the
+          // one in force: a green line about an address nobody saved would
+          // otherwise read as the forum being fixed.
+          r.unsaved ? '${r.sentence}（测的是框里还没保存的地址）' : r.sentence,
+          style: small?.copyWith(color: tone),
+        ),
       ),
     ]);
   }
@@ -362,6 +575,7 @@ class SiteCard extends StatelessWidget {
     required this.onShownChanged,
     this.extra,
     this.onOpenBrowser,
+    this.onSignOut,
     this.onClear,
   });
 
@@ -376,7 +590,15 @@ class SiteCard extends StatelessWidget {
   /// Anything only this site has, below its fields.
   final Widget? extra;
 
+  /// Opens this site's in-app browser. What that is *for* changes with where
+  /// the site currently stands, which is why the label is worked out from
+  /// [ForumSource.access] rather than fixed.
   final VoidCallback? onOpenBrowser;
+
+  /// Ends the session while keeping whatever else was earned in the browser.
+  /// Only offered by a site that can be signed in to, and only once it is.
+  final VoidCallback? onSignOut;
+
   final VoidCallback? onClear;
 
   @override
@@ -385,6 +607,11 @@ class SiteCard extends StatelessWidget {
     final access = source.access;
     final plain = fields.where((c) => !c.advanced).toList();
     final advanced = fields.where((c) => c.advanced).toList();
+
+    // Clearing a credential is the other half of saving it, so it sits beside
+    // whichever control sets it: the field's own 保存 when the reader types
+    // the credential, and the verify button when a browser earns it instead.
+    final clearBesideField = onClear != null && plain.isNotEmpty;
 
     return Panel(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
@@ -438,29 +665,45 @@ class SiteCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(source.accessNote,
                 style: Theme.of(context).textTheme.bodySmall),
-            if (onOpenBrowser != null || onClear != null) ...[
+            if (onOpenBrowser != null ||
+                onSignOut != null ||
+                (onClear != null && !clearBesideField)) ...[
               const SizedBox(height: 16),
               SizedBox(
                 height: kControlHeight,
                 child: Row(children: [
-                  if (onOpenBrowser != null)
+                  if (onOpenBrowser != null) ...[
                     FilledButton(
                       onPressed: onOpenBrowser,
-                      child: Text(access.level == AccessLevel.blocked
-                          ? '开始验证'
-                          : '重新验证'),
+                      child: Text(switch (access.level) {
+                        // Nothing loads yet, so the challenge is the whole job.
+                        AccessLevel.blocked => '开始验证',
+                        // Past the door but anonymous: signing in is the next
+                        // thing anyone would want, so the button offers it
+                        // rather than the step already behind them.
+                        AccessLevel.limited => '登录',
+                        _ => '重新验证',
+                      }),
                     ),
-                  if (onOpenBrowser != null && onClear != null)
                     const SizedBox(width: 8),
-                  if (onClear != null)
+                  ],
+                  if (onSignOut != null) ...[
+                    OutlinedButton(
+                        onPressed: onSignOut, child: const Text('退出登录')),
+                    const SizedBox(width: 8),
+                  ],
+                  if (!clearBesideField)
                     OutlinedButton(
                         onPressed: onClear, child: const Text('清除凭据')),
                 ]),
               ),
             ],
-            for (final field in plain) ...[
+            for (final (i, field) in plain.indexed) ...[
               const SizedBox(height: 16),
-              _FieldRow(field: field),
+              _FieldRow(
+                field: field,
+                onClear: i == 0 && clearBesideField ? onClear : null,
+              ),
             ],
             if (advanced.isNotEmpty) ...[
               const SizedBox(height: 6),
@@ -497,8 +740,17 @@ class SiteCard extends StatelessWidget {
 
 /// A labelled setting and the button that stores it.
 class _FieldRow extends StatefulWidget {
-  const _FieldRow({required this.field});
+  const _FieldRow({required this.field, this.onClear, this.action});
   final SettingField field;
+
+  /// Shown after 保存 when this field is the one holding the credential.
+  final VoidCallback? onClear;
+
+  /// A further action beside 保存. It is handed a way to read whatever is
+  /// currently in the field, rather than the value itself, so that pressing
+  /// it acts on what is on screen — an address can be tried before it is
+  /// committed, and this row does not have to rebuild on every keystroke.
+  final Widget Function(String Function() typed)? action;
 
   @override
   State<_FieldRow> createState() => _FieldRowState();
@@ -570,6 +822,20 @@ class _FieldRowState extends State<_FieldRow> {
             child: const Text('保存'),
           ),
         ),
+        if (widget.action case final action?) ...[
+          const SizedBox(width: 8),
+          SizedBox(height: kControlHeight, child: action(() => _ctl.text)),
+        ],
+        if (widget.onClear != null) ...[
+          const SizedBox(width: 8),
+          SizedBox(
+            height: kControlHeight,
+            child: OutlinedButton(
+              onPressed: widget.onClear,
+              child: const Text('清除凭据'),
+            ),
+          ),
+        ],
       ]),
       if (f.helpUrl != null)
         TextButton(
@@ -616,62 +882,39 @@ class _ToggleRow extends StatelessWidget {
   }
 }
 
-/// The one pill toggle on this page: the tab strip at the top and the theme
-/// picker under 常规 are the same control at two sizes.
-class _Choice extends StatefulWidget {
+/// The theme picker's pill toggle. Its fill is its own, unlike a tab, whose
+/// fill is the strip's sliding pill.
+class _Choice extends StatelessWidget {
   const _Choice({
     required this.label,
     required this.selected,
     required this.onTap,
-    this.idle,
-    this.height = kControlHeight,
-    this.padding = 18,
-    this.fontSize = 13,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  /// Unselected fill. Defaults to the raised surface; a pill sitting inside a
-  /// track of its own passes transparent so the track shows through.
-  final Color? idle;
-
-  final double height;
-  final double padding;
-  final double fontSize;
-
-  @override
-  State<_Choice> createState() => _ChoiceState();
-}
-
-class _ChoiceState extends State<_Choice> {
-  bool _hover = false;
-
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    final selected = widget.selected;
-    final idle = widget.idle ?? p.raised;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: widget.onTap,
+        onTap: onTap,
         child: AnimatedContainer(
           duration: Motion.quick,
           curve: Motion.curve,
-          height: widget.height,
+          height: kControlHeight,
           alignment: Alignment.center,
-          padding: EdgeInsets.symmetric(horizontal: widget.padding),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
           decoration: BoxDecoration(
-            color: selected ? p.accent : (_hover ? p.raised : idle),
+            color: selected ? p.accent : p.raised,
             borderRadius: BorderRadius.circular(Radii.block),
           ),
-          child: Text(widget.label,
+          child: Text(label,
               style: TextStyle(
-                  fontSize: widget.fontSize,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: selected ? p.accentInk : p.inkMuted)),
         ),

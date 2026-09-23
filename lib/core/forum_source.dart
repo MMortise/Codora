@@ -6,6 +6,32 @@ import 'models.dart';
 /// and the settings page are written against this interface only — adding a
 /// site means adding an implementation and registering it, with no changes to
 /// any widget.
+/// How long a profile card waits for a site before saying so.
+///
+/// The feed can spend the client's usual fifteen seconds connecting and
+/// thirty reading: someone who asked for a page will wait for it. A card that
+/// opened because the pointer paused cannot — long before those fire the
+/// reader has moved on, having watched a spinner and learnt nothing. Every
+/// site is held to the same number, so no card can be the one that hangs.
+const kMemberDeadline = Duration(seconds: 8);
+
+/// How a site is answered: which thread, what to say, and — where the site
+/// threads replies rather than just stacking them — which post is being
+/// answered.
+typedef SendReply = Future<Reply> Function(String topicId, String text,
+    {ReplyTarget? to});
+
+/// How a like is given, or taken back.
+typedef ActOnLike = Future<LikeState> Function(String postId,
+    {required bool like});
+
+/// How a picture gets to a site before the post that shows it exists.
+///
+/// It answers with what to write into the box — `upload://…` on Discourse —
+/// because how a body refers to a picture is the site's own business and not
+/// the composer's.
+typedef UploadImage = Future<String> Function(String filename, Uint8List bytes);
+
 abstract class ForumSource {
   SiteId get id;
   String get name;
@@ -40,6 +66,48 @@ abstract class ForumSource {
   /// widgets restart a load when it changes, so a fresh object per call would
   /// refetch every avatar on every rebuild.
   SiteImages get images => SiteImages.plain;
+
+  /// How to read who the stored credentials sign the reader in as, or null
+  /// when this site cannot say.
+  ///
+  /// Whatever it answers, it answers within [kMemberDeadline] or explains
+  /// why it could not.
+  ///
+  /// A field rather than a method because the rail has to know whether to
+  /// offer a card before it goes and fetches one — and because the answer
+  /// turns on the credentials, not on the site: V2EX can only do this with a
+  /// token, and hands back null without one.
+  Future<Member> Function()? get member => null;
+
+  /// How to answer a topic, or null when this site cannot be written to —
+  /// either it has no way in, or the stored credentials do not sign the
+  /// reader in.
+  ///
+  /// A field for the same reason as [member]: the reading pane has to know
+  /// whether to offer a box before anyone types in it, and asking would mean
+  /// a request.
+  ///
+  /// It answers with the reply the site made of the text, not with nothing:
+  /// the pane puts that at the end of the thread rather than reloading, which
+  /// would take the reader back to the first page of something they had
+  /// scrolled through, with their own words the part not loaded.
+  SendReply? get reply => null;
+
+  /// How to like a post, or null where the site has no such thing — or the
+  /// stored credentials do not sign the reader in.
+  ///
+  /// A field for the same reason as [reply]. It answers with where the post
+  /// stands afterwards rather than with nothing, because the count it comes
+  /// back with is the site's, not one the app worked out by adding one.
+  ActOnLike? get like => null;
+
+  /// How to hand this site a picture for a post that is still being written,
+  /// or null where it takes none — and null as well when it would take one
+  /// from someone signed in, but nobody is.
+  ///
+  /// A field for the same reason as [reply]: whether the box shows a picture
+  /// button is decided before anyone presses it.
+  UploadImage? get uploadImage => null;
 
   /// If [uri] points at a topic on this site, return its id.
   String? topicIdFromUrl(Uri uri);

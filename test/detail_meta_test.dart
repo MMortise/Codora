@@ -29,7 +29,8 @@ Reply reply({
       quote: quote,
     );
 
-Future<void> pumpReply(WidgetTester tester, Reply r) async {
+Future<void> pumpReply(WidgetTester tester, Reply r,
+    {bool first = false}) async {
   await tester.pumpWidget(MaterialApp(
     theme: buildTheme(Brightness.dark),
     home: Scaffold(
@@ -39,6 +40,7 @@ Future<void> pumpReply(WidgetTester tester, Reply r) async {
           width: paneWidth,
           child: ReplyTile(
             reply: r,
+            first: first,
             baseUrl: Uri.parse('https://linux.do'),
             onTopicLink: (_) => false,
           ),
@@ -48,6 +50,17 @@ Future<void> pumpReply(WidgetTester tester, Reply r) async {
   ));
   await tester.pump();
 }
+
+/// How many rules the tile draws above itself.
+int topRules(WidgetTester tester) => find
+    .byWidgetPredicate((w) =>
+        w is Container &&
+        w.decoration is BoxDecoration &&
+        ((w.decoration! as BoxDecoration).border?.top.style ??
+                BorderStyle.none) !=
+            BorderStyle.none)
+    .evaluate()
+    .length;
 
 /// WCAG relative luminance.
 double _luminance(Color c) {
@@ -68,6 +81,22 @@ double contrastRatio(Color a, Color b) {
 }
 
 void main() {
+  group('the seam above a reply', () {
+    testWidgets('every reply but the first is separated by a rule',
+        (tester) async {
+      await pumpReply(tester, reply(floor: 2));
+      expect(topRules(tester), 1);
+    });
+
+    testWidgets('the first has none — the reply count already drew one',
+        (tester) async {
+      // The 「{n} 条回复」 caption sits between two rules, so a border here
+      // would land a second line directly under it.
+      await pumpReply(tester, reply(floor: 1), first: true);
+      expect(topRules(tester), 0);
+    });
+  });
+
   group('floor numbers', () {
     testWidgets('are written with a hash', (tester) async {
       await pumpReply(tester, reply(floor: 7));

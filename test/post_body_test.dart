@@ -75,6 +75,63 @@ void main() {
       final image = tester.widget<PostImage>(find.byType(PostImage));
       expect(image.url.toString(), 'https://example.com/a/b.png');
     });
+
+    // Trimmed from what linux.do actually serves for a reply that quotes
+    // someone: the face, then the name, on one line above the quoted text.
+    const quote = '<aside class="quote no-group" data-username="lubiancao">\n'
+        '<div class="title">\n<div class="quote-controls"></div>\n'
+        '<img alt="" width="24" height="24" class="avatar" '
+        'src="https://cdn.ldstatic.com/user_avatar/linux.do/lubiancao/48/1_2.png">'
+        ' lubiancao:</div>\n'
+        '<blockquote>\n<p>被引用的那句话</p>\n</blockquote>\n</aside>\n'
+        '<p>我的回复</p>';
+
+    /// Whether a picture was put into the run of text rather than onto a line
+    /// of its own. An inline one is a span inside the paragraph; a block one
+    /// is a widget beside it.
+    bool inLine(WidgetTester tester, Finder image) => find
+        .ancestor(of: image, matching: find.byType(RichText))
+        .evaluate()
+        .isNotEmpty;
+
+    testWidgets('a quoted name keeps its face on the same line',
+        (tester) async {
+      await pumpBody(tester, quote, BodyFormat.html);
+
+      final avatar = find.byType(PostImage);
+      expect(avatar, findsOneWidget);
+      expect(inLine(tester, avatar), isTrue,
+          reason: 'as a block it sat above the name it belongs to');
+      expect(tester.widget<PostImage>(avatar).width, 24,
+          reason: 'the size the page asked for, not the 48px file it was sent');
+      expect(find.textContaining('lubiancao:', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('被引用的那句话', findRichText: true),
+          findsOneWidget);
+    });
+
+    testWidgets('an emoji stays in the sentence it was typed in',
+        (tester) async {
+      await pumpBody(
+        tester,
+        '<p>说得好 <img class="emoji" width="20" height="20" '
+        'src="/images/emoji/smile.png" alt="smile"></p>',
+        BodyFormat.html,
+      );
+      expect(inLine(tester, find.byType(PostImage)), isTrue);
+      expect(tester.widget<PostImage>(find.byType(PostImage)).width, 20,
+          reason: 'a 72px file drawn at the size of the line');
+    });
+
+    testWidgets('a picture in a post still gets a line of its own',
+        (tester) async {
+      await pumpBody(
+          tester, '<p>看图</p><p><img src="/photo.png" alt="photo"></p>',
+          BodyFormat.html);
+      expect(inLine(tester, find.byType(PostImage)), isFalse);
+      expect(tester.widget<PostImage>(find.byType(PostImage)).width, isNull,
+          reason: 'it keeps its own size, up to the width of the pane');
+    });
   });
 
   group('Markdown bodies', () {
@@ -105,6 +162,70 @@ void main() {
       await pumpBody(tester, '![x](/a/b.png)', BodyFormat.markdown);
       final image = tester.widget<PostImage>(find.byType(PostImage));
       expect(image.url.toString(), 'https://example.com/a/b.png');
+    });
+  });
+
+  // Both renderers hand a preformatted block to a horizontal scroll view,
+  // which suits a listing of code and nothing else people put in one. A V2EX
+  // post written entirely inside `<pre>` came out as one line per paragraph,
+  // reachable only by dragging sideways inside a pane that scrolls the other
+  // way.
+  group('preformatted blocks', () {
+    const long = '一段很长的正文，作者把整篇帖子都写在了一个块里面，所以这一行会一直'
+        '延伸下去，直到读者只能横着拖动才能把它读完，而这恰恰是一个阅读器最不该'
+        '要求读者做的事情。';
+
+    /// A pane narrow enough that the line above cannot possibly fit on one.
+    void narrow(WidgetTester tester) {
+      tester.view.physicalSize = const Size(400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+    }
+
+    bool scrollsSideways(WidgetTester tester) => tester
+        .widgetList<SingleChildScrollView>(find.byType(SingleChildScrollView))
+        .any((s) => s.scrollDirection == Axis.horizontal);
+
+    testWidgets('a long line wraps rather than running off the side',
+        (tester) async {
+      narrow(tester);
+      await pumpBody(tester, '<pre><code>$long</code></pre>', BodyFormat.html);
+
+      final box = tester.getSize(find.text(long));
+      expect(box.width, lessThanOrEqualTo(400));
+      expect(box.height, greaterThan(40), reason: 'which takes several lines');
+      expect(scrollsSideways(tester), isFalse);
+    });
+
+    testWidgets('the line breaks the author wrote are kept', (tester) async {
+      // Wrapping by telling the renderer `white-space: normal` would have
+      // thrown these away, and they are the one part that cannot be guessed
+      // back — they carry the numbered lists these posts are full of.
+      narrow(tester);
+      await pumpBody(
+          tester, '<pre><code>\n1. 第一条\n2. 第二条\n</code></pre>', BodyFormat.html);
+
+      expect(find.text('1. 第一条\n2. 第二条'), findsOneWidget,
+          reason: 'without the blank lines the markup puts around a block');
+    });
+
+    testWidgets('a markdown code block wraps the same way', (tester) async {
+      narrow(tester);
+      await pumpBody(tester, '```\n$long\n```\n', BodyFormat.markdown);
+
+      expect(tester.getSize(find.text(long)).width, lessThanOrEqualTo(400));
+      expect(scrollsSideways(tester), isFalse);
+    });
+
+    testWidgets('and still sits on the raised block it had', (tester) async {
+      narrow(tester);
+      await pumpBody(tester, '<pre><code>print(1)</code></pre>', BodyFormat.html);
+
+      final box = tester.widget<Container>(find.ancestor(
+          of: find.text('print(1)'), matching: find.byType(Container)).first);
+      final decoration = box.decoration! as BoxDecoration;
+      expect(decoration.color, Palette.dark.raised);
+      expect((decoration.borderRadius! as BorderRadius).topLeft.x, Radii.image);
     });
   });
 }
