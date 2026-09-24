@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
 import '../core/forum_source.dart';
+import '../core/library.dart';
 import '../core/models.dart';
 import '../core/util.dart';
 import '../widgets/avatar.dart';
@@ -164,6 +165,16 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
   @override
   void initState() {
     super.initState();
+    // Every thread that loads goes to the top of the history — including
+    // one opened a second time, whose post is already loaded and would
+    // never announce itself again.
+    ref.listenManual(topicDetailProvider(widget.topic), (_, next) {
+      if (next.valueOrNull case final detail?) {
+        Future.microtask(() => ref
+            .read(libraryProvider.notifier)
+            .visit(SavedTopic.of(detail)));
+      }
+    }, fireImmediately: true);
     _scroll.addListener(() {
       if (!_scroll.hasClients) return;
       if (_scroll.position.extentAfter < 800) {
@@ -273,6 +284,8 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     final replies = ref.watch(repliesProvider(widget.topic));
     final source = ref.watch(sourceProvider(widget.topic.site));
     final url = detail.valueOrNull?.url;
+    final bookmarked = ref.watch(
+        libraryProvider.select((l) => l.isBookmarked(widget.topic)));
 
     return Column(children: [
       Container(
@@ -297,6 +310,17 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
             icon: Icons.vertical_align_top_rounded,
             tooltip: _canScrollUp ? '回到顶部' : '已经在顶部',
             onPressed: _canScrollUp ? _scrollToTop : null,
+          ),
+          QuietIconButton(
+            icon: bookmarked
+                ? Icons.bookmark_rounded
+                : Icons.bookmark_outline_rounded,
+            tooltip: bookmarked ? '取消收藏' : '收藏',
+            onPressed: detail.valueOrNull == null
+                ? null
+                : () => ref
+                    .read(libraryProvider.notifier)
+                    .toggleBookmark(SavedTopic.of(detail.value!)),
           ),
           QuietIconButton(
             icon: Icons.link_rounded,

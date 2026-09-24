@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/disk_cache.dart';
 import '../core/forum_source.dart';
+import '../core/library.dart';
 import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/read_log.dart';
@@ -13,14 +14,14 @@ import '../sources/juejin_source.dart';
 import '../sources/linuxdo_source.dart';
 import '../sources/v2ex_source.dart';
 
-enum NavTarget { v2ex, linuxdo, juejin, settings }
+enum NavTarget { v2ex, linuxdo, juejin, library, settings }
 
 extension NavTargetX on NavTarget {
   SiteId? get site => switch (this) {
         NavTarget.v2ex => SiteId.v2ex,
         NavTarget.linuxdo => SiteId.linuxdo,
         NavTarget.juejin => SiteId.juejin,
-        NavTarget.settings => null,
+        NavTarget.library || NavTarget.settings => null,
       };
 }
 
@@ -125,6 +126,49 @@ class ReadLogNotifier extends Notifier<ReadLog> {
 
 final readLogProvider =
     NotifierProvider<ReadLogNotifier, ReadLog>(ReadLogNotifier.new);
+
+// ---------- bookmarks and history ----------
+
+class LibraryNotifier extends Notifier<Library> {
+  @override
+  Library build() => Library.bootstrap;
+
+  Future<void> _set(Library next) async {
+    if (identical(next, state)) return;
+    state = next;
+    Library.bootstrap = next;
+    await next.save();
+  }
+
+  Future<void> toggleBookmark(SavedTopic topic) =>
+      _set(state.toggleBookmark(topic));
+
+  Future<void> visit(SavedTopic topic) => _set(state.withVisit(topic));
+
+  Future<void> clearHistory() => _set(state.withoutHistory());
+}
+
+final libraryProvider =
+    NotifierProvider<LibraryNotifier, Library>(LibraryNotifier.new);
+
+// ---------- search ----------
+
+/// What is being searched for on each site, while a search is showing in
+/// place of a board.
+final searchQueryProvider =
+    StateProvider.family<String?, SiteId>((_, _) => null);
+
+/// A search runs through the same list a board does, under a section id of
+/// its own, so it pages, marks what was read and moves under J and K the way
+/// a board does.
+const _searchPrefix = 'search:';
+
+String searchSectionId(String query) => '$_searchPrefix$query';
+
+/// The query a section id stands for, or null for a real board.
+String? searchQueryOf(String sectionId) => sectionId.startsWith(_searchPrefix)
+    ? sectionId.substring(_searchPrefix.length)
+    : null;
 
 // ---------- sources ----------
 
@@ -324,7 +368,7 @@ class FeedNotifier extends FamilyAsyncNotifier<FeedState, FeedKey> {
   }
 
   Future<FeedState> _load() async {
-    final page = await _source.fetchTopics(_section);
+    final page = await _page();
     return FeedState(items: _dedupe(page.items), nextCursor: page.nextCursor);
   }
 
@@ -338,7 +382,7 @@ class FeedNotifier extends FamilyAsyncNotifier<FeedState, FeedKey> {
     if (cur == null || !cur.hasMore || cur.loadingMore) return;
     state = AsyncData(cur.copyWith(loadingMore: true, clearError: true));
     try {
-      final page = await _source.fetchTopics(_section, cursor: cur.nextCursor);
+      final page = await _page(cursor: cur.nextCursor);
       state = AsyncData(cur.copyWith(
         items: _dedupe([...cur.items, ...page.items]),
         nextCursor: page.nextCursor,
@@ -348,6 +392,16 @@ class FeedNotifier extends FamilyAsyncNotifier<FeedState, FeedKey> {
     } catch (e) {
       state = AsyncData(cur.copyWith(loadingMore: false, moreError: '$e'));
     }
+  }
+
+  /// A page of the board — or of the search, for a section that is one.
+  Future<PageResult<TopicSummary>> _page({String? cursor}) {
+    if (searchQueryOf(arg.sectionId) case final query?) {
+      final search = _source.search;
+      if (search == null) throw Exception('${_source.name} 不能在应用里搜索');
+      return search(query, cursor: cursor);
+    }
+    return _source.fetchTopics(_section, cursor: cursor);
   }
 
   List<TopicSummary> _dedupe(List<TopicSummary> items) {

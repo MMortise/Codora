@@ -25,6 +25,11 @@ typedef SendReply = Future<Reply> Function(String topicId, String text,
 typedef ActOnLike = Future<LikeState> Function(String postId,
     {required bool like});
 
+/// How a site is searched from inside the app: a page of topics matching
+/// [query], and the cursor to the next.
+typedef SearchTopics = Future<PageResult<TopicSummary>> Function(String query,
+    {String? cursor});
+
 /// How a picture gets to a site before the post that shows it exists.
 ///
 /// It answers with what to write into the box — `upload://…` on Discourse —
@@ -108,6 +113,14 @@ abstract class ForumSource {
   /// A field for the same reason as [reply]: whether the box shows a picture
   /// button is decided before anyone presses it.
   UploadImage? get uploadImage => null;
+
+  /// How to search this site from inside the app, or null where it cannot be
+  /// — no search to call, or none the stored credentials can reach.
+  SearchTopics? get search => null;
+
+  /// Where to search this site in a browser, for one the app cannot search
+  /// itself. Null where there is nowhere, or where [search] already does.
+  Uri? searchPage(String query) => null;
 
   /// If [uri] points at a topic on this site, return its id.
   String? topicIdFromUrl(Uri uri);
