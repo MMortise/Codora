@@ -414,6 +414,24 @@ final feedProvider =
     AsyncNotifierProvider.family<FeedNotifier, FeedState, FeedKey>(
         FeedNotifier.new);
 
+/// The feed as the list shows it: without the topics the reader has blocked.
+///
+/// Filtered here rather than in the feed itself, so that blocking or
+/// unblocking something takes effect on what is already loaded instead of
+/// fetching it all again.
+final visibleFeedProvider =
+    Provider.family<AsyncValue<FeedState>, FeedKey>((ref, key) {
+  final feed = ref.watch(feedProvider(key));
+  final blocks = ref.watch(settingsProvider.select((s) => s.blocks));
+  if (blocks.isEmpty) return feed;
+  return feed.whenData((state) => state.copyWith(
+        items: [
+          for (final t in state.items)
+            if (!blocks.blocks(t)) t,
+        ],
+      ));
+});
+
 // ---------- topic detail ----------
 
 final topicDetailProvider =

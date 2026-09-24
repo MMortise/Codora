@@ -16,6 +16,7 @@ import '../sources/v2ex_source.dart';
 import '../widgets/chrome.dart';
 import '../widgets/site_icon.dart';
 import '../widgets/swap.dart';
+import 'block_panel.dart';
 import 'cache_panel.dart';
 import 'linuxdo_auth_page.dart';
 import 'providers.dart';
@@ -202,6 +203,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   List<Widget> _general(AppSettings settings, SettingsNotifier notifier) {
     return [
       const AboutPanel(),
+      const BlockPanel(),
       const CachePanel(),
       Panel(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),

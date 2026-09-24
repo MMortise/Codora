@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'block_list.dart';
 import 'disk_cache.dart';
 import 'models.dart';
 import 'secret_store.dart';
@@ -41,6 +42,7 @@ class AppSettings {
     this.themeMode = 'system',
     this.cacheLimit = kDefaultCacheLimit,
     this.hiddenSites = const {},
+    this.blocks = BlockList.empty,
   });
   final String v2exToken;
 
@@ -74,6 +76,9 @@ class AppSettings {
   /// Sites switched off in settings. Stored as the exceptions rather than the
   /// inclusions so a site added in a later version shows up by default.
   final Set<SiteId> hiddenSites;
+
+  /// Topics kept out of every list.
+  final BlockList blocks;
 
   bool get linuxdoReady => cookieHeaderHas(linuxdoCookie, kLinuxdoClearance);
   bool get linuxdoLoggedIn => cookieHeaderHas(linuxdoCookie, kLinuxdoSignIn);
@@ -124,6 +129,7 @@ class AppSettings {
     String? themeMode,
     int? cacheLimit,
     Set<SiteId>? hiddenSites,
+    BlockList? blocks,
   }) =>
       AppSettings(
         v2exToken: v2exToken ?? this.v2exToken,
@@ -137,6 +143,7 @@ class AppSettings {
         themeMode: themeMode ?? this.themeMode,
         cacheLimit: cacheLimit ?? this.cacheLimit,
         hiddenSites: hiddenSites ?? this.hiddenSites,
+        blocks: blocks ?? this.blocks,
       );
 
   /// Loaded once before the first frame, so nothing ever renders against
@@ -193,6 +200,19 @@ class AppSettings {
         for (final site in SiteId.values)
           if (hidden.contains(site.name)) site,
       },
+      blocks: BlockList(
+        keywords: {...?p.getStringList('blockedKeywords')},
+        // An entry for a site this build does not know is dropped, the way
+        // the switched-off sites are read.
+        authors: {
+          for (final e in p.getStringList('blockedAuthors') ?? const <String>[])
+            if (BlockList.parse(e) != null) e,
+        },
+        sections: {
+          for (final e in p.getStringList('blockedSections') ?? const <String>[])
+            if (BlockList.parse(e) != null) e,
+        },
+      ),
     );
   }
 
@@ -248,6 +268,9 @@ class AppSettings {
       p.setString('themeMode', themeMode),
       p.setInt('cacheLimit', cacheLimit),
       p.setStringList('hiddenSites', [for (final s in hiddenSites) s.name]),
+      p.setStringList('blockedKeywords', [...blocks.keywords]),
+      p.setStringList('blockedAuthors', [...blocks.authors]),
+      p.setStringList('blockedSections', [...blocks.sections]),
       for (final MapEntry(:key, :value) in credentials.entries)
         if (_kept[key] != value) _keep(p, key, value),
     ]);

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app_theme.dart';
+import '../core/block_list.dart';
 import '../core/forum_source.dart';
 import '../core/models.dart';
 import '../core/util.dart';
@@ -57,7 +58,7 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
   }
 
   void _move(int delta) {
-    final items = ref.read(feedProvider(_key)).valueOrNull?.items;
+    final items = ref.read(visibleFeedProvider(_key)).valueOrNull?.items;
     if (items == null || items.isEmpty) return;
     final stack = ref.read(detailStackProvider(widget.site));
     final currentId = stack.isEmpty ? null : stack.first.id;
@@ -141,6 +142,67 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
         .addPostFrameCallback((_) => _reveal(items, idx, attempt + 1));
   }
 
+  /// Below this many topics on screen, another page is fetched without
+  /// waiting for a scroll — a list short enough not to scroll never would.
+  static const _fillTo = 12;
+
+  /// Pages fetched in a row for that reason, so a board the reader has
+  /// blocked nearly all of is not paged through to its end unasked.
+  static const _maxFills = 5;
+  int _fills = 0;
+
+  /// Keeps a list that blocking has thinned out from looking empty.
+  void _fill(FeedState state) {
+    if (state.items.length >= _fillTo) {
+      _fills = 0;
+      return;
+    }
+    if (!state.hasMore || state.loadingMore || state.moreError != null) return;
+    if (_fills >= _maxFills) return;
+    _fills++;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(feedProvider(_key).notifier).loadMore();
+    });
+  }
+
+  /// Offers to block what a topic came from — its board, its author.
+  Future<void> _menu(TopicSummary t, Offset at) async {
+    final author = t.author?.name;
+    final board = t.sectionLabel;
+    if (author == null && board == null) return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+          at & const Size(1, 1), Offset.zero & overlay.size),
+      items: [
+        if (board != null)
+          PopupMenuItem(value: 'board', child: Text('屏蔽节点「$board」')),
+        if (author != null)
+          PopupMenuItem(value: 'author', child: Text('屏蔽作者「$author」')),
+      ],
+    );
+    if (choice == null || !mounted) return;
+    final settings = ref.read(settingsProvider.notifier);
+    BlockList apply(BlockList b, {required bool blocked}) => choice == 'board'
+        ? b.withSection(widget.site, board!, blocked: blocked)
+        : b.withAuthor(widget.site, author!, blocked: blocked);
+    await settings
+        .patch((s) => s.copyWith(blocks: apply(s.blocks, blocked: true)));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(choice == 'board' ? '已屏蔽节点「$board」' : '已屏蔽作者「$author」'),
+      behavior: SnackBarBehavior.floating,
+      width: 320,
+      action: SnackBarAction(
+        label: '撤销',
+        onPressed: () => settings
+            .patch((s) => s.copyWith(blocks: apply(s.blocks, blocked: false))),
+      ),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     // The same moves, asked for by the app's keyboard while the list itself
@@ -156,7 +218,7 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
         case null:
       }
     });
-    final feed = ref.watch(feedProvider(_key));
+    final feed = ref.watch(visibleFeedProvider(_key));
     final stack = ref.watch(detailStackProvider(widget.site));
     final selectedId = stack.isEmpty ? null : stack.first.id;
     final images = ref.watch(siteImagesProvider(widget.site));
@@ -182,6 +244,18 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
             ),
           ),
           data: (state) {
+            _fill(state);
+            if (state.items.isEmpty && (state.hasMore || state.loadingMore)) {
+              // Everything loaded so far is blocked; more is on its way, or
+              // one press away.
+              return Panel(
+                child: _FeedFooter(
+                  state: state,
+                  onMore: () =>
+                      ref.read(feedProvider(_key).notifier).loadMore(),
+                ),
+              );
+            }
             if (state.items.isEmpty) {
               return Panel(
                 child: Center(
@@ -218,6 +292,7 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
                       _focus.requestFocus();
                       widget.onOpen(t);
                     },
+                    onMenu: (at) => _menu(t, at),
                   );
                 },
               ),
@@ -268,6 +343,7 @@ class TopicCard extends StatefulWidget {
     this.read = false,
     this.newReplies = 0,
     this.images = SiteImages.plain,
+    this.onMenu,
   });
   final TopicSummary topic;
   final bool selected;
@@ -279,6 +355,9 @@ class TopicCard extends StatefulWidget {
   final bool read;
   final VoidCallback onTap;
   final SiteImages images;
+
+  /// A secondary click, with where it landed on screen.
+  final ValueChanged<Offset>? onMenu;
 
   @override
   State<TopicCard> createState() => _TopicCardState();
@@ -305,6 +384,9 @@ class _TopicCardState extends State<TopicCard> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
+        onSecondaryTapUp: widget.onMenu == null
+            ? null
+            : (d) => widget.onMenu!(d.globalPosition),
         child: AnimatedContainer(
           duration: Motion.quick,
           curve: Motion.curve,
