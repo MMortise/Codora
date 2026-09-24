@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../core/disk_cache.dart';
 import '../core/forum_source.dart';
@@ -9,6 +10,7 @@ import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/read_log.dart';
 import '../core/settings.dart';
+import '../core/updates.dart';
 import '../core/webview_fetcher.dart';
 import '../sources/juejin_source.dart';
 import '../sources/linuxdo_source.dart';
@@ -65,6 +67,19 @@ final currentNavProvider = Provider<NavTarget>((ref) {
   final visible = ref.watch(visibleSiteIdsProvider);
   if (nav.site == null || visible.contains(nav.site)) return nav;
   return visible.isEmpty ? NavTarget.settings : visible.first.target;
+});
+
+// ---------- the app itself ----------
+
+/// The version running, as the build was stamped with it.
+final appVersionProvider = FutureProvider<String>(
+    (_) async => (await PackageInfo.fromPlatform()).version);
+
+/// A newer release, if one has been published. Asked each time the panel
+/// showing it comes on screen, and again whenever the reader asks.
+final updateProvider = FutureProvider.autoDispose<Release?>((ref) async {
+  final current = await ref.watch(appVersionProvider.future);
+  return newerRelease(current);
 });
 
 // ---------- settings ----------

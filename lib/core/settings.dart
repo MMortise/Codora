@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'disk_cache.dart';
@@ -143,7 +144,10 @@ class AppSettings {
 
   static Future<AppSettings> load() async {
     final p = await SharedPreferences.getInstance();
-    final hidden = p.getStringList('hiddenSites') ?? const [];
+    // Nothing stored means nobody has chosen yet. linux.do then starts off on
+    // Linux, where it cannot be read at all; switching it on stays possible.
+    final hidden = p.getStringList('hiddenSites') ??
+        [if (defaultTargetPlatform == TargetPlatform.linux) SiteId.linuxdo.name];
     return AppSettings(
       v2exToken: p.getString('v2exToken') ?? '',
       v2exProxy: p.getString('v2exProxy') ?? '',
