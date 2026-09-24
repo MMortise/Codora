@@ -169,7 +169,10 @@ class AppSettings {
 
   static Future<AppSettings> load() async {
     final p = await SharedPreferences.getInstance();
-    final hidden = p.getStringList('hiddenSites') ?? const [];
+    // Nothing stored means nobody has chosen yet. linux.do then starts off on
+    // Linux, where it cannot be read at all; switching it on stays possible.
+    final hidden = p.getStringList('hiddenSites') ??
+        [if (defaultTargetPlatform == TargetPlatform.linux) SiteId.linuxdo.name];
     final credentials = {
       for (final key in _credentialKeys) key: await _loadCredential(p, key),
     };

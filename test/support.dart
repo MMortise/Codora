@@ -1,6 +1,7 @@
 // Shared scaffolding for tests that touch stored settings.
 import 'package:codora/app_theme.dart';
 import 'package:codora/core/forum_source.dart';
+import 'package:codora/core/last_place.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/read_log.dart';
 import 'package:codora/core/secret_store.dart';
@@ -12,8 +13,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Clears the process-wide state the app loads before its first frame.
 ///
-/// `AppSettings.bootstrap` and `ReadLog.bootstrap` are statics, so a test that
-/// left one set would decide where the next file starts. Call once per `main`.
+/// `AppSettings.bootstrap`, `ReadLog.bootstrap` and `LastPlace.bootstrap` are
+/// statics, so a test that left one set would decide where the next file
+/// starts. Call once per `main`.
 void resetBootstrapState() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -21,6 +23,7 @@ void resetBootstrapState() {
     AppSettings.forgetWhatIsKept();
     AppSettings.bootstrap = const AppSettings();
     ReadLog.bootstrap = ReadLog.bootstrap.cleared();
+    LastPlace.bootstrap = const LastPlace();
   });
   tearDown(() => AppSettings.bootstrap = const AppSettings());
 }
