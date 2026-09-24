@@ -9,6 +9,7 @@ import 'core/disk_cache.dart';
 import 'core/linuxdo_session.dart';
 import 'core/read_log.dart';
 import 'core/settings.dart';
+import 'features/keyboard.dart';
 import 'features/providers.dart';
 import 'features/shell.dart';
 
@@ -58,6 +59,9 @@ Future<void> main() async {
 class CodoraApp extends ConsumerWidget {
   const CodoraApp({super.key});
 
+  /// Lets the keyboard, which sits above the navigator, open a dialog under it.
+  static final navigatorKey = GlobalKey<NavigatorState>();
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(settingsProvider).themeMode;
@@ -73,7 +77,10 @@ class CodoraApp extends ConsumerWidget {
         'dark' => ThemeMode.dark,
         _ => ThemeMode.system,
       },
+      navigatorKey: navigatorKey,
       home: const AppShell(),
+      builder: (context, navigator) =>
+          AppKeyboard(navigatorKey: navigatorKey, child: navigator!),
       scrollBehavior: const MaterialScrollBehavior().copyWith(scrollbars: false),
     );
   }

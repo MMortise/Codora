@@ -11,6 +11,7 @@ import '../widgets/avatar.dart';
 import '../widgets/chrome.dart';
 import '../widgets/error_view.dart';
 import '../widgets/relative_time.dart';
+import 'keyboard.dart';
 import 'providers.dart';
 
 /// The middle column: one card per topic, identical for every site. Sites
@@ -142,6 +143,19 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
 
   @override
   Widget build(BuildContext context) {
+    // The same moves, asked for by the app's keyboard while the list itself
+    // does not have focus — the reader clicked into the thread, say.
+    ref.listen(listCommandProvider(widget.site), (_, command) {
+      switch (command?.kind) {
+        case ListCommand.next:
+          _move(1);
+        case ListCommand.previous:
+          _move(-1);
+        case ListCommand.refresh:
+          ref.read(feedProvider(_key).notifier).refresh();
+        case null:
+      }
+    });
     final feed = ref.watch(feedProvider(_key));
     final stack = ref.watch(detailStackProvider(widget.site));
     final selectedId = stack.isEmpty ? null : stack.first.id;
