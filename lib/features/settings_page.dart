@@ -11,6 +11,7 @@ import '../core/proxy.dart';
 import '../core/settings.dart';
 import '../core/updates.dart';
 import '../core/util.dart';
+import '../sources/linuxdo_source.dart';
 import '../sources/v2ex_source.dart';
 import '../widgets/chrome.dart';
 import '../widgets/site_icon.dart';
@@ -169,6 +170,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onSave: (v) => save((x) => x.copyWith(juejinCookie: v.trim())),
           ),
         ],
+      // Pasting a cookie would not help where there is no browser to send
+      // it from; the card's note says why instead.
+      SiteId.linuxdo when !LinuxDoSource.supported => const [],
       SiteId.linuxdo => [
           SettingField(
             // The clearance is the one cookie worth *not* pasting: it belongs
