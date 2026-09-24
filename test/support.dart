@@ -1,10 +1,16 @@
 // Shared scaffolding for tests that touch stored settings.
+import 'dart:typed_data';
+
 import 'package:codora/app_theme.dart';
 import 'package:codora/core/forum_source.dart';
+import 'package:codora/core/last_place.dart';
+import 'package:codora/core/library.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/notices.dart';
 import 'package:codora/core/read_log.dart';
+import 'package:codora/core/secret_store.dart';
 import 'package:codora/core/settings.dart';
+import 'package:codora/core/snapshot.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,13 +18,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Clears the process-wide state the app loads before its first frame.
 ///
-/// `AppSettings.bootstrap` and `ReadLog.bootstrap` are statics, so a test that
-/// left one set would decide where the next file starts. Call once per `main`.
+/// `AppSettings.bootstrap`, `ReadLog.bootstrap` and `LastPlace.bootstrap` are
+/// statics, so a test that left one set would decide where the next file
+/// starts. Call once per `main`.
 void resetBootstrapState() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    SecretStore.instance = MemorySecretStore();
+    AppSettings.forgetWhatIsKept();
     AppSettings.bootstrap = const AppSettings();
     ReadLog.bootstrap = ReadLog.bootstrap.cleared();
+    Snapshots.instance = memorySnapshots();
+    LastPlace.bootstrap = const LastPlace();
+    Library.bootstrap = const Library();
     AnnouncedMarks.bootstrap = AnnouncedMarks.empty;
     NoticeOutlet.instance = FakeOutlet();
   });
@@ -142,7 +154,56 @@ class FakeSource implements ForumSource {
   Future<PageResult<Reply>> fetchReplies(String id, {String? cursor}) =>
       throw UnimplementedError();
   @override
+  SearchTopics? get search => null;
+  @override
+  Uri? searchPage(String query) => null;
+  @override
   String? topicIdFromUrl(Uri uri) => null;
+}
+
+/// Saved lists and threads, kept in memory: a widget test cannot wait on real
+/// files. [store] is there to look into, or to fill before a test starts.
+Snapshots memorySnapshots([Map<Uri, Uint8List>? store]) {
+  final files = store ?? <Uri, Uint8List>{};
+  return Snapshots(
+    read: (key) async => files[key],
+    write: (key, bytes) async => files[key] = bytes,
+  );
+}
+
+/// A secret store held in memory, which can be told to be out of reach — the
+/// way the Keychain is when the reader turns its prompt down, or Linux has no
+/// Secret Service running.
+class MemorySecretStore implements SecretStore {
+  final values = <String, String>{};
+
+  /// Every call throws while this is set.
+  bool unavailable = false;
+
+  /// Takes writes and keeps nothing, as a misconfigured Keychain group does.
+  bool forgetful = false;
+
+  void _check() {
+    if (unavailable) throw StateError('secret store unavailable');
+  }
+
+  @override
+  Future<String?> read(String key) async {
+    _check();
+    return values[key];
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    _check();
+    if (!forgetful) values[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    _check();
+    values.remove(key);
+  }
 }
 
 /// Announcements and the icon's count, written down instead of shown.

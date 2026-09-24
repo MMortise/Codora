@@ -569,6 +569,16 @@ class V2exSource implements ForumSource {
     return null;
   }
 
+  // V2EX has no search of its own to call. A search engine limited to its
+  // threads is the next best thing, and Bing is one that can be reached
+  // from where most of its readers are.
+  @override
+  SearchTopics? get search => null;
+
+  @override
+  Uri? searchPage(String query) => Uri.https(
+      'www.bing.com', '/search', {'q': 'site:v2ex.com/t $query'});
+
   @override
   String? topicIdFromUrl(Uri uri) {
     if (!uri.host.endsWith('v2ex.com')) return null;

@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../core/forum_source.dart';
 import '../core/http.dart';
@@ -202,6 +203,45 @@ class JuejinSource implements ForumSource {
       items: items,
       nextCursor: hasMore ? res['cursor']?.toString() : null,
       total: asInt(res['count']),
+    );
+  }
+
+  // Juejin's own search, the one its site calls, limited to articles.
+  @override
+  SearchTopics? get search => _search;
+
+  @override
+  Uri? searchPage(String query) => null;
+
+  Future<PageResult<TopicSummary>> _search(String query,
+      {String? cursor}) async {
+    final res = await _post('/search_api/v1/search', {
+      'cursor': cursor ?? '0',
+      'key_word': query,
+      'id_type': 2,
+      'limit': 20,
+      'search_type': 0,
+      'sort_type': 0,
+      'version': 1,
+    });
+    return parseSearch(res);
+  }
+
+  /// A page of search results. Each wraps the same article object the feeds
+  /// hand back, as `result_model`; anything else it may carry — users, tags —
+  /// is not a topic and is passed over.
+  @visibleForTesting
+  PageResult<TopicSummary> parseSearch(Map res) {
+    final items = <TopicSummary>[];
+    for (final hit in (res['data'] as List? ?? const []).whereType<Map>()) {
+      final model = hit['result_model'];
+      if (model is Map && model['article_info'] is Map) {
+        items.add(_mapArticle(model));
+      }
+    }
+    return PageResult(
+      items: items,
+      nextCursor: res['has_more'] == true ? res['cursor']?.toString() : null,
     );
   }
 
