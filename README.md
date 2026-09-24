@@ -2,7 +2,17 @@
 
 一个桌面端论坛聚合阅读器，把 V2EX、linux.do、掘金放进同一个界面里读。macOS 为主，同时保留 Windows 和 Linux 平台目录。
 
-## 运行
+## 下载安装
+
+到 [Releases](https://github.com/MMortise/Codora/releases) 下载最新的 `Codora-<版本>-macos.zip`，解压后把 `codora.app` 拖进「应用程序」。
+
+如果那个版本没有经过公证，第一次打开时 macOS 会拦下来：在 Finder 里右键 `codora.app` 选「打开」，再确认一次即可，之后正常双击就行。
+
+应用里「设置 → 常规」会显示当前版本，并检查 Releases 上有没有更新的版本，有的话点「前往下载」。
+
+## 从源码运行
+
+需要 Flutter 3.41.7（`.metadata` 里记录的版本）。
 
 ```bash
 flutter pub get
@@ -106,6 +116,20 @@ flutter test --dart-define=LIVE=true test/sources_live_test.dart
 
 [test/fixtures](test/fixtures) 里存了三个站各自的真实正文，用来离线验证渲染器吃得下真实内容，
 换新样本的命令写在那个目录的说明里。
+
+## 持续集成与发布
+
+- [ci.yml](.github/workflows/ci.yml)：每个 PR 和推到 `main` 的提交都会跑 `flutter analyze` 和 `flutter test`。
+- [release.yml](.github/workflows/release.yml)：推一个 `v` 开头的标签（例如 `git tag v0.2.0 && git push origin v0.2.0`），就会在 macOS 上构建、打成 zip、发布到 Releases。版本号取自标签，构建号取自这次运行的序号。
+
+签名和公证是可选的。在仓库 Secrets 里配好下面这些，发布出去的就是签过名、公证过的包；缺了就发布 ad-hoc 签名的包：
+
+| Secret | 内容 |
+| --- | --- |
+| `MACOS_CERTIFICATE` | Developer ID Application 证书导出的 .p12，base64 编码 |
+| `MACOS_CERTIFICATE_PASSWORD` | 导出 .p12 时设的密码 |
+| `MACOS_SIGNING_IDENTITY` | 证书名，例如 `Developer ID Application: Name (TEAMID)` |
+| `NOTARY_APPLE_ID` / `NOTARY_TEAM_ID` / `NOTARY_PASSWORD` | 公证用的 Apple ID、团队 ID 和 App 专用密码 |
 
 ## 品牌
 

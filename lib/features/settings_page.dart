@@ -9,6 +9,7 @@ import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/proxy.dart';
 import '../core/settings.dart';
+import '../core/updates.dart';
 import '../core/util.dart';
 import '../sources/linuxdo_source.dart';
 import '../sources/v2ex_source.dart';
@@ -200,6 +201,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   List<Widget> _general(AppSettings settings, SettingsNotifier notifier) {
     return [
+      const AboutPanel(),
       const CachePanel(),
       Panel(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
@@ -925,6 +927,65 @@ class _Choice extends StatelessWidget {
                   color: selected ? p.accentInk : p.inkMuted)),
         ),
       ),
+    );
+  }
+}
+
+/// Which version is running, and whether a newer one has been published.
+///
+/// Updating is the reader's call: the panel says what there is and takes them
+/// to the release page, rather than replacing the app under them.
+class AboutPanel extends ConsumerWidget {
+  const AboutPanel({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.palette;
+    final small = Theme.of(context).textTheme.bodySmall;
+    final version = ref.watch(appVersionProvider).valueOrNull;
+    final update = ref.watch(updateProvider);
+    void recheck() => ref.invalidate(updateProvider);
+
+    final Widget status = update.when(
+      skipLoadingOnRefresh: false,
+      loading: () => Text('正在检查更新…', style: small),
+      error: (_, _) => Row(children: [
+        Text('没能检查更新', style: small),
+        const SizedBox(width: 8),
+        TextButton(onPressed: recheck, child: const Text('再试一次')),
+      ]),
+      data: (Release? release) => release == null
+          ? Row(children: [
+              Text('已是最新版本', style: small),
+              const SizedBox(width: 8),
+              TextButton(onPressed: recheck, child: const Text('检查更新')),
+            ])
+          : SizedBox(
+              height: kControlHeight,
+              child: Row(children: [
+                Pill(label: '新版本 ${release.version}', tone: p.mint, filled: true),
+                const SizedBox(width: 12),
+                FilledButton(
+                  onPressed: () => launchUrl(release.url),
+                  child: const Text('前往下载'),
+                ),
+              ]),
+            ),
+    );
+
+    return Panel(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('Codora', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(width: 10),
+          if (version != null)
+            Text(version, style: TextStyle(fontSize: 13, color: p.inkMuted)),
+        ]),
+        const SizedBox(height: 12),
+        status,
+      ]),
     );
   }
 }
