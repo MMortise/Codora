@@ -1,15 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../core/disk_cache.dart';
 import '../core/forum_source.dart';
+import '../core/last_place.dart';
 import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/read_log.dart';
 import '../core/settings.dart';
 import '../core/snapshot.dart';
 import '../core/util.dart';
+import '../core/updates.dart';
 import '../core/webview_fetcher.dart';
 import '../sources/juejin_source.dart';
 import '../sources/linuxdo_source.dart';
@@ -49,7 +52,12 @@ final settingsTabProvider =
 
 /// Where the reader has clicked. Read through [currentNavProvider], which is
 /// the one that accounts for sites switched off.
-final navProvider = StateProvider<NavTarget>((_) => NavTarget.v2ex);
+///
+/// Opens on the site the reader was last on; [rememberPlaceProvider] keeps
+/// that up to date. A site since switched off is handled the same way as one
+/// switched off mid-session, by [currentNavProvider].
+final navProvider = StateProvider<NavTarget>(
+    (_) => LastPlace.bootstrap.site?.target ?? NavTarget.v2ex);
 
 /// The tab actually on screen.
 ///
@@ -61,6 +69,19 @@ final currentNavProvider = Provider<NavTarget>((ref) {
   final visible = ref.watch(visibleSiteIdsProvider);
   if (nav.site == null || visible.contains(nav.site)) return nav;
   return visible.isEmpty ? NavTarget.settings : visible.first.target;
+});
+
+// ---------- the app itself ----------
+
+/// The version running, as the build was stamped with it.
+final appVersionProvider = FutureProvider<String>(
+    (_) async => (await PackageInfo.fromPlatform()).version);
+
+/// A newer release, if one has been published. Asked each time the panel
+/// showing it comes on screen, and again whenever the reader asks.
+final updateProvider = FutureProvider.autoDispose<Release?>((ref) async {
+  final current = await ref.watch(appVersionProvider.future);
+  return newerRelease(current);
 });
 
 // ---------- settings ----------
@@ -112,6 +133,18 @@ class ReadLogNotifier extends Notifier<ReadLog> {
 
   Future<void> markRead(SiteId site, String id) async {
     final next = state.markRead(site, id);
+    if (identical(next, state)) return;
+    state = next;
+    ReadLog.bootstrap = next;
+    await next.save();
+  }
+
+  /// Keeps what has been seen of a post the reader has open: how many
+  /// replies it has, and which of them was last on screen.
+  Future<void> recordProgress(SiteId site, String id,
+      {int? replies, int? position}) async {
+    final next =
+        state.withProgress(site, id, replies: replies, position: position);
     if (identical(next, state)) return;
     state = next;
     ReadLog.bootstrap = next;
@@ -274,8 +307,26 @@ final sectionsProvider =
   return ref.watch(sourceProvider(site)).sections();
 });
 
-final selectedSectionProvider =
-    StateProvider.family<String?, SiteId>((_, _) => null);
+/// The board picked on each site, starting from the one picked last time.
+///
+/// What is remembered may not be a board any more — the site dropped it, or a
+/// credential changed which boards there are — so the page checks it against
+/// the boards the site actually lists before using it.
+final selectedSectionProvider = StateProvider.family<String?, SiteId>(
+    (_, site) => LastPlace.bootstrap.sections[site]);
+
+/// Writes down each site and board the reader goes to, so the next launch
+/// opens on them. The shell watches this for as long as the app is open.
+final rememberPlaceProvider = Provider<void>((ref) {
+  ref.listen(navProvider, (_, next) {
+    if (next.site case final site?) unawaited(LastPlace.rememberSite(site));
+  });
+  for (final site in SiteId.values) {
+    ref.listen(selectedSectionProvider(site), (_, next) {
+      if (next != null) unawaited(LastPlace.rememberSection(site, next));
+    });
+  }
+});
 
 /// Stack of opened topics in the detail pane; last is the visible one.
 final detailStackProvider =
@@ -455,6 +506,24 @@ class FeedNotifier extends FamilyAsyncNotifier<FeedState, FeedKey> {
 final feedProvider =
     AsyncNotifierProvider.family<FeedNotifier, FeedState, FeedKey>(
         FeedNotifier.new);
+
+/// The feed as the list shows it: without the topics the reader has blocked.
+///
+/// Filtered here rather than in the feed itself, so that blocking or
+/// unblocking something takes effect on what is already loaded instead of
+/// fetching it all again.
+final visibleFeedProvider =
+    Provider.family<AsyncValue<FeedState>, FeedKey>((ref, key) {
+  final feed = ref.watch(feedProvider(key));
+  final blocks = ref.watch(settingsProvider.select((s) => s.blocks));
+  if (blocks.isEmpty) return feed;
+  return feed.whenData((state) => state.copyWith(
+        items: [
+          for (final t in state.items)
+            if (!blocks.blocks(t)) t,
+        ],
+      ));
+});
 
 // ---------- topic detail ----------
 
