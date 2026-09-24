@@ -1,5 +1,4 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -83,7 +82,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   onChanged: () => _reload(SiteId.v2ex),
                 )
               : null,
-          onOpenBrowser: source.id == SiteId.linuxdo && !Platform.isLinux
+          // Read through the framework rather than `dart:io`, so a test
+          // runs as the platform it names and not whichever one it is on.
+          onOpenBrowser: source.id == SiteId.linuxdo &&
+                  defaultTargetPlatform != TargetPlatform.linux
               ? () => _openBrowser(source.id,
                   // Past the challenge and anonymous: take them straight to
                   // the form instead of the front page they have to find it
