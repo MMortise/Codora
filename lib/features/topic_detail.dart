@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -6,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app_theme.dart';
 import '../core/forum_source.dart';
 import '../core/models.dart';
+import '../core/read_log.dart';
 import '../core/util.dart';
 import '../widgets/avatar.dart';
 import '../widgets/chrome.dart';
@@ -13,6 +15,7 @@ import '../widgets/error_view.dart';
 import '../widgets/like_button.dart';
 import '../widgets/post_body.dart';
 import '../widgets/relative_time.dart';
+import '../widgets/reveal.dart';
 import '../widgets/swap.dart';
 import 'pick_pictures.dart';
 import 'keyboard.dart';
@@ -166,9 +169,24 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
   static const _showTopButtonAfter = 400.0;
   bool _canScrollUp = false;
 
+  /// What had been seen of this topic before it was opened this time, read
+  /// before anything here records the new state over it.
+  late final ReadProgress? _arrival;
+
+  /// Where the thread offers to take the reader, once its replies are in.
+  /// Null when there is nowhere worth offering, or they have gone.
+  _Offer? _offer;
+  bool _offered = false;
+
+  /// One key per reply, so a reply can be found once it has been laid out.
+  final _replyKeys = <String, GlobalKey>{};
+
   @override
   void initState() {
     super.initState();
+    _arrival = ref
+        .read(readLogProvider)
+        .progressOf(widget.topic.site, widget.topic.id);
     _scroll.addListener(() {
       if (!_scroll.hasClients) return;
       if (_scroll.position.extentAfter < 800) {
@@ -179,6 +197,136 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
         setState(() => _canScrollUp = canScrollUp);
       }
     });
+  }
+
+  /// Works out, once, what the thread should offer: the first reply that
+  /// arrived since the last visit, or — with nothing new — the reply the
+  /// reader was on when they left.
+  ///
+  /// New replies are only offered where the site numbers its floors, which is
+  /// what says the thread is in the order it was written. Juejin sorts its
+  /// comments by popularity, so "after the ones you saw" means nothing there.
+  void _settleOffer(TopicDetail? detail, RepliesState replies) {
+    if (_offered) return;
+    _offered = true;
+    final arrival = _arrival;
+    final current = detail?.replyCount ?? replies.total;
+    // Built during a frame: what is recorded, and the pill, wait for the end
+    // of it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // What the list compares against from now on: this visit has seen them.
+      if (current != null) {
+        ref.read(readLogProvider.notifier).recordProgress(
+            widget.topic.site, widget.topic.id,
+            replies: current);
+      }
+      if (arrival == null || replies.all.isEmpty) return;
+      final chronological = replies.all.any((r) => r.floor != null);
+      final fresh = arrival.newSince(current);
+      if (fresh > 0 && chronological) {
+        setState(() => _offer = _Offer.newReplies(fresh, arrival.replies!));
+      } else if (arrival.position case final at? when at > 0) {
+        setState(() => _offer = _Offer.resume(at));
+      }
+    });
+  }
+
+  /// Takes the reader to reply [index], loading pages of the thread until it
+  /// is there.
+  Future<void> _jumpTo(int index) async {
+    setState(() => _offer = null);
+    final notifier = ref.read(repliesProvider(widget.topic).notifier);
+    // A page at a time, and not forever: a thread that stops growing or will
+    // not load is taken as far as it goes.
+    var pages = 0;
+    while (mounted && pages < 50) {
+      final r = ref.read(repliesProvider(widget.topic)).valueOrNull;
+      if (r == null || index < r.all.length || !r.hasMore) break;
+      if (r.moreError != null) break;
+      if (r.loadingMore) {
+        // The scroll already asked for this page; wait for it to land.
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        continue;
+      }
+      pages++;
+      await notifier.loadMore();
+    }
+    if (!mounted) return;
+    final all = ref.read(repliesProvider(widget.topic)).valueOrNull?.all;
+    if (all == null || all.isEmpty) return;
+    final target = index.clamp(0, all.length - 1);
+    WidgetsBinding.instance.addPostFrameCallback((_) => revealItem(
+          controller: _scroll,
+          count: all.length,
+          index: target,
+          built: (i) => laidOut(_replyKeys[all[i].id]),
+          alignment: 0,
+          inset: 12,
+        ));
+  }
+
+  /// Which reply is at the top of the screen, if the reader is in the
+  /// replies at all.
+  int? _replyOnScreen() {
+    if (!_scroll.hasClients) return null;
+    final all = ref.read(repliesProvider(widget.topic)).valueOrNull?.all;
+    if (all == null) return null;
+    final top = _scroll.position.pixels;
+    for (var i = 0; i < all.length; i++) {
+      final box = laidOut(_replyKeys[all[i].id]);
+      if (box == null) continue;
+      final start =
+          RenderAbstractViewport.of(box).getOffsetToReveal(box, 0).offset;
+      if (start + box.size.height > top + 1) return i;
+    }
+    return null;
+  }
+
+  /// Writes down where the reader has stopped whenever a scroll comes to
+  /// rest, so closing the thread — or the app — loses nothing.
+  ///
+  /// Read once the frame after has been laid out: a scroll can end in the
+  /// same event that moved it, before the replies it moved to exist.
+  bool _onScrollEnd(ScrollEndNotification end) {
+    if (end.depth != 0) return false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final at = _replyOnScreen();
+      if (at != null) {
+        ref.read(readLogProvider.notifier).recordProgress(
+            widget.topic.site, widget.topic.id,
+            position: at);
+      }
+    });
+    WidgetsBinding.instance.scheduleFrame();
+    return false;
+  }
+
+  /// The thread, with the offer floating over its top edge.
+  Widget _overlaid(Widget thread) {
+    final offer = _offer;
+    return Stack(children: [
+      Positioned.fill(
+        child: NotificationListener<ScrollEndNotification>(
+          onNotification: _onScrollEnd,
+          child: thread,
+        ),
+      ),
+      if (offer != null)
+        Positioned(
+          top: 12,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: _OfferPill(
+              offer: offer,
+              onGo: () => _jumpTo(offer.index),
+              onDismiss: () => setState(() => _offer = null),
+            ),
+          ),
+        ),
+    ]);
   }
 
   void _scrollToTop() {
@@ -337,6 +485,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     final p = context.palette;
     final detail = ref.watch(topicDetailProvider(widget.topic));
     final replies = ref.watch(repliesProvider(widget.topic));
+    if (replies.valueOrNull case final r?) _settleOffer(detail.valueOrNull, r);
     final source = ref.watch(sourceProvider(widget.topic.site));
     final url = detail.valueOrNull?.url;
 
@@ -377,7 +526,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
         ]),
       ),
       Expanded(
-        child: detail.when(
+        child: _overlaid(detail.when(
           loading: () => const Center(child: CircularProgressIndicator(strokeWidth: 2)),
           error: (e, _) => ErrorView(error: e, onRetry: _reload),
           data: (d) => Scrollbar(
@@ -438,7 +587,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
               ],
             ),
           ),
-        ),
+        )),
       ),
       // Only where there is somewhere for it to go: a site the app can write
       // to, signed in, and a post that actually loaded.
@@ -488,6 +637,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
           // of the thread, where its writer left it.
           itemCount: r.all.length,
           itemBuilder: (context, i) => ReplyTile(
+            key: _replyKeys.putIfAbsent(r.all[i].id, GlobalKey.new),
             first: i == 0,
             reply: r.all[i],
             baseUrl: baseUrl,
@@ -836,6 +986,67 @@ class _QuotedReply extends StatelessWidget {
           ),
         ],
       ]),
+    );
+  }
+}
+
+/// Somewhere in the thread worth going to straight away.
+class _Offer {
+  const _Offer.newReplies(int this.count, this.index);
+  const _Offer.resume(this.index) : count = null;
+
+  /// How many replies are new, for an offer of new replies.
+  final int? count;
+
+  /// The reply to go to, counted from zero.
+  final int index;
+}
+
+/// The offer, as a pill floating over the top of the thread.
+class _OfferPill extends StatelessWidget {
+  const _OfferPill(
+      {required this.offer, required this.onGo, required this.onDismiss});
+
+  final _Offer offer;
+  final VoidCallback onGo;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final fresh = offer.count != null;
+    final tone = fresh ? p.mint : p.ink;
+    return Material(
+      color: p.raised,
+      elevation: 3,
+      shadowColor: Colors.black26,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Radii.pill),
+        side: BorderSide(color: p.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 3, 4, 3),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          TextButton.icon(
+            onPressed: onGo,
+            icon: Icon(
+                fresh ? Icons.south_rounded : Icons.bookmark_outline_rounded,
+                size: 15,
+                color: tone),
+            label: Text(
+                fresh
+                    ? '${offer.count} 条新回复'
+                    : '回到上次读到的第 ${offer.index + 1} 条回复',
+                style: TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w600, color: tone)),
+          ),
+          QuietIconButton(
+            icon: Icons.close_rounded,
+            tooltip: '不用了',
+            onPressed: onDismiss,
+          ),
+        ]),
+      ),
     );
   }
 }

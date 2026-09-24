@@ -137,6 +137,18 @@ class ReadLogNotifier extends Notifier<ReadLog> {
     await next.save();
   }
 
+  /// Keeps what has been seen of a post the reader has open: how many
+  /// replies it has, and which of them was last on screen.
+  Future<void> recordProgress(SiteId site, String id,
+      {int? replies, int? position}) async {
+    final next =
+        state.withProgress(site, id, replies: replies, position: position);
+    if (identical(next, state)) return;
+    state = next;
+    ReadLog.bootstrap = next;
+    await next.save();
+  }
+
   Future<void> clear() async {
     state = state.cleared();
     ReadLog.bootstrap = state;
