@@ -1,5 +1,4 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -11,6 +10,7 @@ import '../core/models.dart';
 import '../core/proxy.dart';
 import '../core/settings.dart';
 import '../core/util.dart';
+import '../sources/linuxdo_source.dart';
 import '../sources/v2ex_source.dart';
 import '../widgets/chrome.dart';
 import '../widgets/site_icon.dart';
@@ -83,7 +83,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   onChanged: () => _reload(SiteId.v2ex),
                 )
               : null,
-          onOpenBrowser: source.id == SiteId.linuxdo && !Platform.isLinux
+          // Read through the framework rather than `dart:io`, so a test
+          // runs as the platform it names and not whichever one it is on.
+          onOpenBrowser: source.id == SiteId.linuxdo &&
+                  defaultTargetPlatform != TargetPlatform.linux
               ? () => _openBrowser(source.id,
                   // Past the challenge and anonymous: take them straight to
                   // the form instead of the front page they have to find it
@@ -166,6 +169,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onSave: (v) => save((x) => x.copyWith(juejinCookie: v.trim())),
           ),
         ],
+      // Pasting a cookie would not help where there is no browser to send
+      // it from; the card's note says why instead.
+      SiteId.linuxdo when !LinuxDoSource.supported => const [],
       SiteId.linuxdo => [
           SettingField(
             // The clearance is the one cookie worth *not* pasting: it belongs
