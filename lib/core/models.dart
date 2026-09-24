@@ -230,12 +230,17 @@ class TopicDetail {
     this.liked = false,
     this.canLike = false,
     this.canUnlike = false,
+    this.savedAt,
   });
   final SiteId site;
   final String id;
   final String title;
   final String url;
   final String content;
+
+  /// When the copy on screen was saved, for a thread read back from disk
+  /// because the site could not be reached. Null for one fetched just now.
+  final DateTime? savedAt;
   final BodyFormat format;
   final Author? author;
   final String? sectionLabel;

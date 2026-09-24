@@ -30,6 +30,7 @@ Future<void> main() async {
   // Opened before the first frame so the first avatar already has somewhere
   // to look, and trimmed now in case the budget was lowered last time.
   await DiskCache.instance.prepare(budget: AppSettings.bootstrap.cacheLimit);
+  await DiskCache.pages.prepare();
   // The browser linux.do is read through starts each launch with whatever
   // WebKit persisted, and that is what actually goes out — so the two copies
   // are brought into agreement, the browser's winning where it has one. A

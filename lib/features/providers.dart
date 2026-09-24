@@ -10,6 +10,8 @@ import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/read_log.dart';
 import '../core/settings.dart';
+import '../core/snapshot.dart';
+import '../core/util.dart';
 import '../core/updates.dart';
 import '../core/webview_fetcher.dart';
 import '../sources/juejin_source.dart';
@@ -330,6 +332,21 @@ final rememberPlaceProvider = Provider<void>((ref) {
 final detailStackProvider =
     StateProvider.family<List<TopicRef>, SiteId>((_, _) => const []);
 
+/// Who is reading [site], as far as saved copies are concerned — see
+/// [Snapshots]. A fingerprint of the credential, never the credential.
+///
+/// linux.do counts only as signed in or not: Discourse rotates its sign-in
+/// cookie every few minutes, and filing copies under it would throw them all
+/// away as often.
+final readerProvider = Provider.family<String, SiteId>((ref, site) {
+  final credential = ref.watch(settingsProvider.select((s) => switch (site) {
+        SiteId.v2ex => s.v2exToken,
+        SiteId.linuxdo => s.linuxdoLoggedIn ? 'signed-in' : '',
+        SiteId.juejin => s.juejinCookie,
+      }));
+  return Snapshots.fingerprint(credential);
+});
+
 // ---------- feed ----------
 
 class FeedState {
@@ -338,11 +355,26 @@ class FeedState {
     this.nextCursor,
     this.loadingMore = false,
     this.moreError,
+    this.savedAt,
+    this.refreshing = false,
+    this.refreshError,
   });
   final List<TopicSummary> items;
   final String? nextCursor;
   final bool loadingMore;
   final String? moreError;
+
+  /// When the list on screen was saved, while it is a copy from disk rather
+  /// than what the site said just now.
+  final DateTime? savedAt;
+
+  /// Whether the site is being asked for a newer list than this one.
+  final bool refreshing;
+
+  /// Why the last attempt at a newer list did not land. What is on screen is
+  /// what was there before.
+  final String? refreshError;
+
   bool get hasMore => nextCursor != null;
 
   FeedState copyWith({
@@ -352,36 +384,96 @@ class FeedState {
     bool? loadingMore,
     String? moreError,
     bool clearError = false,
+    bool? refreshing,
+    String? refreshError,
   }) =>
       FeedState(
         items: items ?? this.items,
         nextCursor: clearCursor ? null : (nextCursor ?? this.nextCursor),
         loadingMore: loadingMore ?? this.loadingMore,
         moreError: clearError ? null : (moreError ?? this.moreError),
+        savedAt: savedAt,
+        refreshing: refreshing ?? this.refreshing,
+        refreshError: refreshError ?? this.refreshError,
       );
 }
 
 class FeedNotifier extends FamilyAsyncNotifier<FeedState, FeedKey> {
   late ForumSource _source;
-  late Section _section;
+  late String _reader;
+  late Future<List<Section>> _sections;
+
+  /// Which build is current. A newer list arriving for a build since
+  /// replaced — the credentials changed under it — is dropped.
+  int _generation = 0;
 
   @override
   Future<FeedState> build(FeedKey arg) async {
+    final generation = ++_generation;
     _source = ref.watch(sourceProvider(arg.site));
-    final sections = await ref.watch(sectionsProvider(arg.site).future);
-    _section = sections.firstWhere((s) => s.id == arg.sectionId,
+    _reader = ref.watch(readerProvider(arg.site));
+    // Asked for but not waited on: a saved list can go up before the site
+    // has said which boards it has.
+    _sections = ref.watch(sectionsProvider(arg.site).future);
+    final saved = await Snapshots.instance.loadFeed(arg, _reader);
+    if (saved == null) return _load();
+    // The copy goes up now; the site is asked behind it, and its answer
+    // replaces the copy when it comes.
+    Future.microtask(() => _revalidate(generation));
+    return FeedState(
+      items: _dedupe(saved.items),
+      nextCursor: saved.nextCursor,
+      savedAt: saved.savedAt,
+      refreshing: true,
+    );
+  }
+
+  Future<Section> _section() async {
+    final sections = await _sections;
+    return sections.firstWhere((s) => s.id == arg.sectionId,
         orElse: () => Section(id: arg.sectionId, title: arg.sectionId));
-    return _load();
   }
 
   Future<FeedState> _load() async {
-    final page = await _source.fetchTopics(_section);
+    final page = await _source.fetchTopics(await _section());
+    unawaited(Snapshots.instance.saveFeed(arg, _reader, page));
     return FeedState(items: _dedupe(page.items), nextCursor: page.nextCursor);
   }
 
+  Future<void> _revalidate(int generation) async {
+    try {
+      final fresh = await _load();
+      if (generation != _generation) return;
+      state = AsyncData(fresh);
+    } catch (e) {
+      if (generation != _generation) return;
+      final cur = state.valueOrNull;
+      if (cur == null) return;
+      state = AsyncData(
+          cur.copyWith(refreshing: false, refreshError: errorText(e)));
+    }
+  }
+
+  /// Asks the site again. A list already on screen stays there if it
+  /// cannot, with the reason beside it.
   Future<void> refresh() async {
+    final generation = _generation;
+    final cur = state.valueOrNull;
     state = const AsyncLoading<FeedState>().copyWithPrevious(state);
-    state = await AsyncValue.guard(_load);
+    try {
+      final fresh = await _load();
+      if (generation == _generation) state = AsyncData(fresh);
+    } catch (e, st) {
+      if (generation != _generation) return;
+      state = cur == null || cur.items.isEmpty
+          ? AsyncError(e, st)
+          : AsyncData(FeedState(
+              items: cur.items,
+              nextCursor: cur.nextCursor,
+              savedAt: cur.savedAt,
+              refreshError: errorText(e),
+            ));
+    }
   }
 
   Future<void> loadMore() async {
@@ -389,7 +481,8 @@ class FeedNotifier extends FamilyAsyncNotifier<FeedState, FeedKey> {
     if (cur == null || !cur.hasMore || cur.loadingMore) return;
     state = AsyncData(cur.copyWith(loadingMore: true, clearError: true));
     try {
-      final page = await _source.fetchTopics(_section, cursor: cur.nextCursor);
+      final page =
+          await _source.fetchTopics(await _section(), cursor: cur.nextCursor);
       state = AsyncData(cur.copyWith(
         items: _dedupe([...cur.items, ...page.items]),
         nextCursor: page.nextCursor,
@@ -434,9 +527,27 @@ final visibleFeedProvider =
 
 // ---------- topic detail ----------
 
+/// A thread's opening post: from the site, and saved as it arrives.
+///
+/// When the site cannot be reached, the copy saved last time is shown in its
+/// place, marked with when it was saved. A site that answered and said no —
+/// sign in first — is taken at its word instead: an old copy would hide the
+/// one thing the reader can do about it.
 final topicDetailProvider =
-    FutureProvider.family<TopicDetail, TopicRef>((ref, r) {
-  return ref.watch(sourceProvider(r.site)).fetchTopic(r.id);
+    FutureProvider.family<TopicDetail, TopicRef>((ref, r) async {
+  final source = ref.watch(sourceProvider(r.site));
+  final reader = ref.watch(readerProvider(r.site));
+  try {
+    final detail = await source.fetchTopic(r.id);
+    unawaited(Snapshots.instance.saveTopic(detail, reader));
+    return detail;
+  } on AuthRequiredException {
+    rethrow;
+  } catch (_) {
+    final saved = await Snapshots.instance.loadTopic(r, reader);
+    if (saved == null) rethrow;
+    return saved;
+  }
 });
 
 class RepliesState {
@@ -474,11 +585,24 @@ class RepliesNotifier extends FamilyAsyncNotifier<RepliesState, TopicRef> {
   @override
   Future<RepliesState> build(TopicRef arg) async {
     _source = ref.watch(sourceProvider(arg.site));
+    final reader = ref.watch(readerProvider(arg.site));
     // Make sure the topic itself is loaded first so sources can share state.
     await ref.watch(topicDetailProvider(arg).future);
-    final page = await _source.fetchReplies(arg.id);
-    return RepliesState(
-        items: page.items, nextCursor: page.nextCursor, total: page.total);
+    // The first page is saved with the post, and stands in for it the same
+    // way; the pages after it are only ever the site's.
+    try {
+      final page = await _source.fetchReplies(arg.id);
+      unawaited(Snapshots.instance.saveReplies(arg, reader, page));
+      return RepliesState(
+          items: page.items, nextCursor: page.nextCursor, total: page.total);
+    } on AuthRequiredException {
+      rethrow;
+    } catch (_) {
+      final saved = await Snapshots.instance.loadReplies(arg, reader);
+      if (saved == null) rethrow;
+      return RepliesState(
+          items: saved.items, nextCursor: saved.nextCursor, total: saved.total);
+    }
   }
 
   Future<void> loadMore() async {

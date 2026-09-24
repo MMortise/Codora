@@ -1,4 +1,6 @@
 // Shared scaffolding for tests that touch stored settings.
+import 'dart:typed_data';
+
 import 'package:codora/app_theme.dart';
 import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/last_place.dart';
@@ -6,6 +8,7 @@ import 'package:codora/core/models.dart';
 import 'package:codora/core/read_log.dart';
 import 'package:codora/core/secret_store.dart';
 import 'package:codora/core/settings.dart';
+import 'package:codora/core/snapshot.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +26,7 @@ void resetBootstrapState() {
     AppSettings.forgetWhatIsKept();
     AppSettings.bootstrap = const AppSettings();
     ReadLog.bootstrap = ReadLog.bootstrap.cleared();
+    Snapshots.instance = memorySnapshots();
     LastPlace.bootstrap = const LastPlace();
   });
   tearDown(() => AppSettings.bootstrap = const AppSettings());
@@ -146,6 +150,16 @@ class FakeSource implements ForumSource {
       throw UnimplementedError();
   @override
   String? topicIdFromUrl(Uri uri) => null;
+}
+
+/// Saved lists and threads, kept in memory: a widget test cannot wait on real
+/// files. [store] is there to look into, or to fill before a test starts.
+Snapshots memorySnapshots([Map<Uri, Uint8List>? store]) {
+  final files = store ?? <Uri, Uint8List>{};
+  return Snapshots(
+    read: (key) async => files[key],
+    write: (key, bytes) async => files[key] = bytes,
+  );
 }
 
 /// A secret store held in memory, which can be told to be out of reach — the

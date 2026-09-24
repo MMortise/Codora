@@ -11,6 +11,9 @@ import 'package:path_provider/path_provider.dart';
 /// you are still looking at is worse than one that takes a few gigabytes.
 const kDefaultCacheLimit = 10 * 1024 * 1024 * 1024;
 
+/// What saved lists and threads may use. Thousands of threads fit.
+const kPagesCacheLimit = 256 * 1024 * 1024;
+
 /// Pictures kept on disk between launches.
 ///
 /// Avatars are the case that matters: a feed shows the same few dozen faces
@@ -22,13 +25,22 @@ const kDefaultCacheLimit = 10 * 1024 * 1024 * 1024;
 /// last read, which is everything eviction needs, and a separate index is one
 /// more thing that can disagree with the truth.
 class DiskCache {
-  DiskCache._();
+  DiskCache._(this.folder, {this.limit = kDefaultCacheLimit});
 
-  static final instance = DiskCache._();
+  static final instance = DiskCache._('images');
+
+  /// Lists and threads, kept so there is something to show before the
+  /// network answers — see [Snapshots]. Text is small beside pictures, so it
+  /// has a fixed budget of its own rather than a share of theirs: a gallery
+  /// of screenshots should not be what pushes the last thread read out.
+  static final pages = DiskCache._('pages', limit: kPagesCacheLimit);
+
+  /// The directory under the app's support folder.
+  final String folder;
 
   /// How much the whole cache may use. Set from settings at launch and
   /// whenever the reader changes it.
-  int limit = kDefaultCacheLimit;
+  int limit;
 
   /// Trimming has to walk the directory, so it is not worth doing on every
   /// picture. This much has to be written first.
@@ -59,7 +71,7 @@ class DiskCache {
     if (budget != null) limit = budget;
     try {
       final support = await getApplicationSupportDirectory();
-      final dir = Directory('${support.path}/images');
+      final dir = Directory('${support.path}/$folder');
       if (!dir.existsSync()) await dir.create(recursive: true);
       _dir = dir;
       // A limit lowered while the app was closed takes effect now rather than

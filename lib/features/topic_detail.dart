@@ -534,6 +534,10 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
             child: CustomScrollView(
               controller: _scroll,
               slivers: [
+                if (d.savedAt case final savedAt?)
+                  SliverToBoxAdapter(
+                    child: _OfflineNote(savedAt: savedAt, onRetry: _reload),
+                  ),
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(30, 26, 30, 0),
                   sliver: SliverToBoxAdapter(
@@ -1047,6 +1051,40 @@ class _OfferPill extends StatelessWidget {
           ),
         ]),
       ),
+    );
+  }
+}
+
+/// Says the thread on screen is the copy saved last time, because the site
+/// could not be reached just now.
+class _OfflineNote extends StatelessWidget {
+  const _OfflineNote({required this.savedAt, required this.onRetry});
+
+  final DateTime savedAt;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(30, 18, 30, 0),
+      padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: p.raised,
+        borderRadius: BorderRadius.circular(Radii.card),
+        border: Border.all(color: p.line),
+      ),
+      child: Row(children: [
+        Icon(Icons.cloud_off_rounded, size: 15, color: p.inkMuted),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+              '没能连上站点，这是${relativeTime(savedAt)}保存的版本。'
+              '点赞和回复要等连上以后。',
+              style: TextStyle(fontSize: 12, height: 1.35, color: p.inkMuted)),
+        ),
+        TextButton(onPressed: onRetry, child: const Text('重试')),
+      ]),
     );
   }
 }

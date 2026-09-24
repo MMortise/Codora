@@ -4,10 +4,13 @@ import 'disk_cache.dart';
 import 'read_log.dart';
 
 /// The kinds of thing the app leaves on disk, in the order they are worth
-/// looking at: the one that grows without bound, the one a site fills in on
-/// its own, and the one that is the reader's own history.
+/// looking at: the one that grows without bound, the lists and threads kept
+/// for reading offline, the one a site fills in on its own, and the one that
+/// is the reader's own history.
 enum CacheKind {
   images('图片', '头像和帖子里的图，按地址存，最久没看的先丢'),
+  pages('帖子', '最近看过的列表和帖子。打开时先显示它们，连不上站点时也能看。'
+      '最多 256 MB，最久没看的先丢'),
   web('网页数据', 'linux.do 的内置浏览器留下的验证、Cookie 和页面缓存。'
       '清理时只会清掉其中的页面缓存'),
   readLog('阅读记录', '哪些帖子读过。很小，但它也占着地方');
@@ -68,10 +71,12 @@ Directory? _libraryDir() {
 /// refuses to draw is worse than one that under-counts.
 Future<CacheReport> measureCache(int limit) async {
   final images = await DiskCache.instance.size();
+  final pages = await DiskCache.pages.size();
   final web = await _webDataSize();
   return CacheReport(
     sizes: {
       CacheKind.images: images,
+      CacheKind.pages: pages,
       CacheKind.web: web,
       CacheKind.readLog: ReadLog.bootstrap.storedBytes,
     },
