@@ -31,6 +31,11 @@ final listCommandProvider =
 final detailCommandProvider =
     StateProvider.family<Command<DetailCommand>?, SiteId>((_, _) => null);
 
+/// Asks a site's search field to open and take the cursor. Counted, so
+/// asking twice is asked twice.
+final searchRequestProvider =
+    StateProvider.family<int, SiteId>((_, _) => 0);
+
 int _serial = 0;
 
 void sendListCommand(WidgetRef ref, SiteId site, ListCommand kind) =>
@@ -51,6 +56,7 @@ const kShortcuts = <(String keys, String what)>[
   ('⇧ R', '重新加载正在读的帖子'),
   ('O', '在浏览器中打开正在读的帖子'),
   ('C', '复制正在读的帖子的链接'),
+  ('⌘ F 或 /', '搜索当前站点'),
   ('⌘ 1 – 9', '切换到第几个站点'),
   ('⌘ ,', '打开设置'),
   ('?', '显示这张快捷键表'),
@@ -114,6 +120,13 @@ class _AppKeyboardState extends ConsumerState<AppKeyboard> {
     final key = event.logicalKey;
 
     if (command) {
+      if (key == LogicalKeyboardKey.keyF) {
+        if (ref.read(currentNavProvider).site case final site?) {
+          ref.read(searchRequestProvider(site).notifier).state++;
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      }
       if (key == LogicalKeyboardKey.comma) {
         ref.read(navProvider.notifier).state = NavTarget.settings;
         return KeyEventResult.handled;
@@ -145,7 +158,9 @@ class _AppKeyboardState extends ConsumerState<AppKeyboard> {
     final repeat = event is KeyRepeatEvent;
     if (site == null) return KeyEventResult.ignored;
 
-    if (key == LogicalKeyboardKey.keyJ) {
+    if (event.character == '/' && !shift) {
+      ref.read(searchRequestProvider(site).notifier).state++;
+    } else if (key == LogicalKeyboardKey.keyJ) {
       sendListCommand(ref, site, ListCommand.next);
     } else if (key == LogicalKeyboardKey.keyK) {
       sendListCommand(ref, site, ListCommand.previous);

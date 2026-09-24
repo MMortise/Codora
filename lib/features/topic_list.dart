@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -12,6 +11,7 @@ import '../widgets/avatar.dart';
 import '../widgets/chrome.dart';
 import '../widgets/error_view.dart';
 import '../widgets/relative_time.dart';
+import '../widgets/reveal.dart';
 import 'keyboard.dart';
 import 'providers.dart';
 
@@ -75,72 +75,14 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
   /// card, until the picked one was scrolled clean out of sight.
   final _cardKeys = <String, GlobalKey>{};
 
-  /// How many times [_reveal] will jump toward a card that is not built yet
-  /// before giving up. Each jump is aimed from the cards actually laid out,
-  /// so it lands close; the rest are for a list still growing its extent.
-  static const _revealAttempts = 20;
-
-  RenderBox? _builtCard(TopicSummary topic) {
-    final box = _cardKeys[topic.id]?.currentContext?.findRenderObject();
-    return box is RenderBox && box.attached && box.hasSize ? box : null;
-  }
-
-  /// Scrolls just far enough that card [idx] is wholly on screen.
-  ///
-  /// A card already in view stays where it is. One that has not been built —
-  /// the reader scrolled well away from the selection — is jumped toward
-  /// first, from where the built cards are and how tall they run, until it is.
-  void _reveal(List<TopicSummary> items, int idx, [int attempt = 0]) {
-    if (!mounted || !_scroll.hasClients) return;
-    final position = _scroll.position;
-    final card = _builtCard(items[idx]);
-    if (card != null) {
-      final viewport = RenderAbstractViewport.of(card);
-      final top = viewport.getOffsetToReveal(card, 0).offset;
-      final bottom = viewport.getOffsetToReveal(card, 1).offset;
-      final double target;
-      if (position.pixels > top) {
-        target = top;
-      } else if (position.pixels < bottom) {
-        target = bottom;
-      } else {
-        return;
-      }
-      _scroll.animateTo(
-        target.clamp(position.minScrollExtent, position.maxScrollExtent),
-        duration: Motion.swap,
-        curve: Motion.curve,
+  /// Scrolls just far enough that card [idx] is wholly on screen, finding
+  /// it first if the reader has scrolled well away — see [revealItem].
+  void _reveal(List<TopicSummary> items, int idx) => revealItem(
+        controller: _scroll,
+        count: items.length,
+        index: idx,
+        built: (i) => laidOut(_cardKeys[items[i].id]),
       );
-      return;
-    }
-    if (attempt >= _revealAttempts) return;
-    // The first and last cards laid out right now, and where they sit.
-    int? first, last;
-    RenderBox? firstBox, lastBox;
-    for (var i = 0; i < items.length; i++) {
-      final box = _builtCard(items[i]);
-      if (box == null) continue;
-      if (first == null) {
-        first = i;
-        firstBox = box;
-      }
-      last = i;
-      lastBox = box;
-    }
-    if (first == null || last == null) return;
-    final viewport = RenderAbstractViewport.of(firstBox!);
-    final firstTop = viewport.getOffsetToReveal(firstBox, 0).offset;
-    final lastBottom =
-        viewport.getOffsetToReveal(lastBox!, 0).offset + lastBox.size.height;
-    final perCard = (lastBottom - firstTop) / (last - first + 1);
-    final guess = idx > last
-        ? lastBottom + (idx - last - 1) * perCard
-        : firstTop - (first - idx) * perCard;
-    _scroll.jumpTo((guess - position.viewportDimension / 2)
-        .clamp(position.minScrollExtent, position.maxScrollExtent));
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _reveal(items, idx, attempt + 1));
-  }
 
   /// Below this many topics on screen, another page is fetched without
   /// waiting for a scroll — a list short enough not to scroll never would.

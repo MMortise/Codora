@@ -6,6 +6,7 @@ import 'package:codora/core/models.dart';
 import 'package:codora/core/settings.dart';
 import 'package:codora/features/block_panel.dart';
 import 'package:codora/features/providers.dart';
+import 'package:codora/features/topic_detail.dart';
 import 'package:codora/features/topic_list.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -240,4 +241,54 @@ void main() {
       expect(find.text('还没有屏蔽任何作者'), findsOneWidget);
     });
   });
+
+  group('a thread', () {
+    testWidgets("folds a blocked author's replies, and opens one on request",
+        (tester) async {
+      await pumpApp(
+        tester,
+        TopicDetailView(
+          topic: const TopicRef(SiteId.v2ex, '1'),
+          canGoBack: false,
+          onBack: () {},
+          onOpenTopic: (_) {},
+        ),
+        settings: AppSettings(
+            blocks: BlockList.empty.withAuthor(SiteId.v2ex, 'troll')),
+        size: const Size(900, 800),
+        overrides: [sourceProvider(SiteId.v2ex).overrideWithValue(_Thread())],
+      );
+      expect(find.text('已屏蔽 troll 的回复'), findsOneWidget);
+      expect(find.textContaining('不想看的话', findRichText: true), findsNothing);
+      expect(find.textContaining('正常回复', findRichText: true), findsOneWidget);
+
+      await tester.tap(find.text('显示'));
+      await tester.pumpAndSettle();
+      expect(find.text('已屏蔽 troll 的回复'), findsNothing);
+      expect(find.textContaining('不想看的话', findRichText: true), findsOneWidget);
+    });
+  });
+}
+
+/// A thread with one reply from a blocked author and one from anyone else.
+class _Thread extends FakeSource {
+  _Thread() : super(null);
+
+  @override
+  Future<TopicDetail> fetchTopic(String id) async => TopicDetail(
+        site: SiteId.v2ex,
+        id: id,
+        title: '一个帖子',
+        url: 'https://www.v2ex.com/t/$id',
+        content: '<p>正文</p>',
+      );
+
+  @override
+  Future<PageResult<Reply>> fetchReplies(String id, {String? cursor}) async =>
+      const PageResult(items: [
+        Reply(id: 'a', content: '<p>不想看的话</p>', floor: 1,
+            author: Author(name: 'troll')),
+        Reply(id: 'b', content: '<p>正常回复</p>', floor: 2,
+            author: Author(name: 'neo')),
+      ]);
 }
