@@ -19,6 +19,9 @@ flutter pub get
 flutter run -d macos
 ```
 
+V2EX Token 和两个站的 Cookie 存在系统自己的密钥存储里：macOS 是钥匙串，Windows 是凭据管理器，Linux 是 Secret Service，所以在 Linux 上构建要先装 `libsecret-1-dev`。
+密钥存储用不了时（比如没有运行密钥环服务），凭据退回到普通设置里保存，不会丢；等密钥存储能用了，下次启动会自动搬过去。
+
 ## 平台支持
 
 macOS 是主平台，所有功能都在上面验证过。Windows 和 Linux 能构建，但情况不同：

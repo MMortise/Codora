@@ -4,6 +4,7 @@ import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/last_place.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/read_log.dart';
+import 'package:codora/core/secret_store.dart';
 import 'package:codora/core/settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,6 +19,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 void resetBootstrapState() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    SecretStore.instance = MemorySecretStore();
+    AppSettings.forgetWhatIsKept();
     AppSettings.bootstrap = const AppSettings();
     ReadLog.bootstrap = ReadLog.bootstrap.cleared();
     LastPlace.bootstrap = const LastPlace();
@@ -143,4 +146,39 @@ class FakeSource implements ForumSource {
       throw UnimplementedError();
   @override
   String? topicIdFromUrl(Uri uri) => null;
+}
+
+/// A secret store held in memory, which can be told to be out of reach — the
+/// way the Keychain is when the reader turns its prompt down, or Linux has no
+/// Secret Service running.
+class MemorySecretStore implements SecretStore {
+  final values = <String, String>{};
+
+  /// Every call throws while this is set.
+  bool unavailable = false;
+
+  /// Takes writes and keeps nothing, as a misconfigured Keychain group does.
+  bool forgetful = false;
+
+  void _check() {
+    if (unavailable) throw StateError('secret store unavailable');
+  }
+
+  @override
+  Future<String?> read(String key) async {
+    _check();
+    return values[key];
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    _check();
+    if (!forgetful) values[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    _check();
+    values.remove(key);
+  }
 }
