@@ -5,6 +5,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../core/disk_cache.dart';
 import '../core/forum_source.dart';
+import '../core/last_place.dart';
 import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/read_log.dart';
@@ -49,7 +50,12 @@ final settingsTabProvider =
 
 /// Where the reader has clicked. Read through [currentNavProvider], which is
 /// the one that accounts for sites switched off.
-final navProvider = StateProvider<NavTarget>((_) => NavTarget.v2ex);
+///
+/// Opens on the site the reader was last on; [rememberPlaceProvider] keeps
+/// that up to date. A site since switched off is handled the same way as one
+/// switched off mid-session, by [currentNavProvider].
+final navProvider = StateProvider<NavTarget>(
+    (_) => LastPlace.bootstrap.site?.target ?? NavTarget.v2ex);
 
 /// The tab actually on screen.
 ///
@@ -287,8 +293,26 @@ final sectionsProvider =
   return ref.watch(sourceProvider(site)).sections();
 });
 
-final selectedSectionProvider =
-    StateProvider.family<String?, SiteId>((_, _) => null);
+/// The board picked on each site, starting from the one picked last time.
+///
+/// What is remembered may not be a board any more — the site dropped it, or a
+/// credential changed which boards there are — so the page checks it against
+/// the boards the site actually lists before using it.
+final selectedSectionProvider = StateProvider.family<String?, SiteId>(
+    (_, site) => LastPlace.bootstrap.sections[site]);
+
+/// Writes down each site and board the reader goes to, so the next launch
+/// opens on them. The shell watches this for as long as the app is open.
+final rememberPlaceProvider = Provider<void>((ref) {
+  ref.listen(navProvider, (_, next) {
+    if (next.site case final site?) unawaited(LastPlace.rememberSite(site));
+  });
+  for (final site in SiteId.values) {
+    ref.listen(selectedSectionProvider(site), (_, next) {
+      if (next != null) unawaited(LastPlace.rememberSection(site, next));
+    });
+  }
+});
 
 /// Stack of opened topics in the detail pane; last is the visible one.
 final detailStackProvider =
