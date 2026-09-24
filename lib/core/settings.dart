@@ -39,6 +39,7 @@ class AppSettings {
     this.themeMode = 'system',
     this.cacheLimit = kDefaultCacheLimit,
     this.hiddenSites = const {},
+    this.quietSites = const {},
   });
   final String v2exToken;
 
@@ -72,6 +73,20 @@ class AppSettings {
   /// Sites switched off in settings. Stored as the exceptions rather than the
   /// inclusions so a site added in a later version shows up by default.
   final Set<SiteId> hiddenSites;
+
+  /// Sites whose new notices the reader does not want announced. Stored as
+  /// the exceptions, like [hiddenSites].
+  final Set<SiteId> quietSites;
+
+  bool announces(SiteId site) => !quietSites.contains(site);
+
+  AppSettings withAnnouncing(SiteId site, bool on) => copyWith(
+        quietSites: {
+          for (final s in quietSites)
+            if (s != site) s,
+          if (!on) site,
+        },
+      );
 
   bool get linuxdoReady => cookieHeaderHas(linuxdoCookie, kLinuxdoClearance);
   bool get linuxdoLoggedIn => cookieHeaderHas(linuxdoCookie, kLinuxdoSignIn);
@@ -122,6 +137,7 @@ class AppSettings {
     String? themeMode,
     int? cacheLimit,
     Set<SiteId>? hiddenSites,
+    Set<SiteId>? quietSites,
   }) =>
       AppSettings(
         v2exToken: v2exToken ?? this.v2exToken,
@@ -135,6 +151,7 @@ class AppSettings {
         themeMode: themeMode ?? this.themeMode,
         cacheLimit: cacheLimit ?? this.cacheLimit,
         hiddenSites: hiddenSites ?? this.hiddenSites,
+        quietSites: quietSites ?? this.quietSites,
       );
 
   /// Loaded once before the first frame, so nothing ever renders against
@@ -160,6 +177,11 @@ class AppSettings {
         for (final site in SiteId.values)
           if (hidden.contains(site.name)) site,
       },
+      quietSites: {
+        for (final site in SiteId.values)
+          if ((p.getStringList('quietSites') ?? const []).contains(site.name))
+            site,
+      },
     );
   }
 
@@ -178,6 +200,7 @@ class AppSettings {
       p.setString('themeMode', themeMode),
       p.setInt('cacheLimit', cacheLimit),
       p.setStringList('hiddenSites', [for (final s in hiddenSites) s.name]),
+      p.setStringList('quietSites', [for (final s in quietSites) s.name]),
     ]);
   }
 }

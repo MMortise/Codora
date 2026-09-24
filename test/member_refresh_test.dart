@@ -5,6 +5,7 @@
 import 'dart:async';
 
 import 'package:codora/core/models.dart';
+import 'package:codora/core/settings.dart';
 import 'package:codora/features/providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -60,6 +61,8 @@ void main() {
   });
 
   testWidgets('it re-reads itself on the hour', (tester) async {
+    // Announcing new notices asks more often; see the next test.
+    AppSettings.bootstrap = const AppSettings(quietSites: {SiteId.v2ex});
     final v2ex = FakeSource(() async => _member);
     final container = await openApp(tester, [v2ex]);
     expect(v2ex.calls, 1);
@@ -70,6 +73,21 @@ void main() {
     await tester.pump(const Duration(minutes: 2));
     await tester.pumpAndSettle();
     expect(v2ex.calls, 2, reason: 'the hour is up');
+    await disposeApp(tester, container);
+  });
+
+  testWidgets('a site announcing its notices is read every ten minutes',
+      (tester) async {
+    final v2ex = FakeSource(() async => _member);
+    final container = await openApp(tester, [v2ex]);
+    expect(v2ex.calls, 1);
+
+    await tester.pump(memberAnnounceEvery - const Duration(minutes: 1));
+    expect(v2ex.calls, 1);
+
+    await tester.pump(const Duration(minutes: 2));
+    await tester.pumpAndSettle();
+    expect(v2ex.calls, 2);
     await disposeApp(tester, container);
   });
 

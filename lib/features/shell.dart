@@ -90,6 +90,7 @@ class _Rail extends ConsumerWidget {
     // profiles open: they load as the app comes up and stay current, rather
     // than making whoever hovers first wait for a request.
     ref.watch(loadedMembersProvider);
+    ref.watch(inboxWatcherProvider);
 
     return Container(
       width: 64,

@@ -2,6 +2,7 @@
 import 'package:codora/app_theme.dart';
 import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/models.dart';
+import 'package:codora/core/notices.dart';
 import 'package:codora/core/read_log.dart';
 import 'package:codora/core/settings.dart';
 import 'package:flutter/material.dart';
@@ -18,6 +19,8 @@ void resetBootstrapState() {
     SharedPreferences.setMockInitialValues({});
     AppSettings.bootstrap = const AppSettings();
     ReadLog.bootstrap = ReadLog.bootstrap.cleared();
+    AnnouncedMarks.bootstrap = AnnouncedMarks.empty;
+    NoticeOutlet.instance = FakeOutlet();
   });
   tearDown(() => AppSettings.bootstrap = const AppSettings());
 }
@@ -140,4 +143,20 @@ class FakeSource implements ForumSource {
       throw UnimplementedError();
   @override
   String? topicIdFromUrl(Uri uri) => null;
+}
+
+/// Announcements and the icon's count, written down instead of shown.
+class FakeOutlet implements NoticeOutlet {
+  final announced = <(SiteId, String, String)>[];
+  final badges = <int>[];
+
+  @override
+  ValueChanged<SiteId>? onOpen;
+
+  @override
+  Future<void> announce(SiteId site, String title, String body) async =>
+      announced.add((site, title, body));
+
+  @override
+  Future<void> badge(int count) async => badges.add(count);
 }

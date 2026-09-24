@@ -16,6 +16,7 @@ import '../widgets/site_icon.dart';
 import '../widgets/swap.dart';
 import 'cache_panel.dart';
 import 'linuxdo_auth_page.dart';
+import 'notify_panel.dart';
 import 'providers.dart';
 
 /// Settings in two halves: the forums, one card each, and everything that is
@@ -196,6 +197,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   List<Widget> _general(AppSettings settings, SettingsNotifier notifier) {
     return [
+      const NotifyPanel(),
       const CachePanel(),
       Panel(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),

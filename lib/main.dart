@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app_theme.dart';
 import 'core/disk_cache.dart';
 import 'core/linuxdo_session.dart';
+import 'core/notices.dart';
 import 'core/read_log.dart';
 import 'core/settings.dart';
 import 'features/providers.dart';
@@ -20,6 +21,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppSettings.bootstrap = await AppSettings.load();
   ReadLog.bootstrap = await ReadLog.load();
+  AnnouncedMarks.bootstrap = await AnnouncedMarks.load();
   // Opened before the first frame so the first avatar already has somewhere
   // to look, and trimmed now in case the budget was lowered last time.
   await DiskCache.instance.prepare(budget: AppSettings.bootstrap.cacheLimit);
