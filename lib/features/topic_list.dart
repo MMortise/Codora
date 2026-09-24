@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,6 +12,7 @@ import '../widgets/avatar.dart';
 import '../widgets/chrome.dart';
 import '../widgets/error_view.dart';
 import '../widgets/relative_time.dart';
+import 'keyboard.dart';
 import 'providers.dart';
 
 /// The middle column: one card per topic, identical for every site. Sites
@@ -63,11 +65,81 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
     var idx = items.indexWhere((t) => t.id == currentId);
     idx = (idx + delta).clamp(0, items.length - 1);
     widget.onOpen(items[idx]);
-    _scroll.animateTo(
-      (idx * 96.0 - 180).clamp(0, _scroll.position.maxScrollExtent),
-      duration: Motion.swap,
-      curve: Motion.curve,
-    );
+    _reveal(items, idx);
+  }
+
+  /// Where each card is, so the one just picked can be brought into view.
+  ///
+  /// Cards are as tall as their title and excerpt make them, so no fixed
+  /// height gives a card's offset: guessing one drifted further with every
+  /// card, until the picked one was scrolled clean out of sight.
+  final _cardKeys = <String, GlobalKey>{};
+
+  /// How many times [_reveal] will jump toward a card that is not built yet
+  /// before giving up. Each jump is aimed from the cards actually laid out,
+  /// so it lands close; the rest are for a list still growing its extent.
+  static const _revealAttempts = 20;
+
+  RenderBox? _builtCard(TopicSummary topic) {
+    final box = _cardKeys[topic.id]?.currentContext?.findRenderObject();
+    return box is RenderBox && box.attached && box.hasSize ? box : null;
+  }
+
+  /// Scrolls just far enough that card [idx] is wholly on screen.
+  ///
+  /// A card already in view stays where it is. One that has not been built —
+  /// the reader scrolled well away from the selection — is jumped toward
+  /// first, from where the built cards are and how tall they run, until it is.
+  void _reveal(List<TopicSummary> items, int idx, [int attempt = 0]) {
+    if (!mounted || !_scroll.hasClients) return;
+    final position = _scroll.position;
+    final card = _builtCard(items[idx]);
+    if (card != null) {
+      final viewport = RenderAbstractViewport.of(card);
+      final top = viewport.getOffsetToReveal(card, 0).offset;
+      final bottom = viewport.getOffsetToReveal(card, 1).offset;
+      final double target;
+      if (position.pixels > top) {
+        target = top;
+      } else if (position.pixels < bottom) {
+        target = bottom;
+      } else {
+        return;
+      }
+      _scroll.animateTo(
+        target.clamp(position.minScrollExtent, position.maxScrollExtent),
+        duration: Motion.swap,
+        curve: Motion.curve,
+      );
+      return;
+    }
+    if (attempt >= _revealAttempts) return;
+    // The first and last cards laid out right now, and where they sit.
+    int? first, last;
+    RenderBox? firstBox, lastBox;
+    for (var i = 0; i < items.length; i++) {
+      final box = _builtCard(items[i]);
+      if (box == null) continue;
+      if (first == null) {
+        first = i;
+        firstBox = box;
+      }
+      last = i;
+      lastBox = box;
+    }
+    if (first == null || last == null) return;
+    final viewport = RenderAbstractViewport.of(firstBox!);
+    final firstTop = viewport.getOffsetToReveal(firstBox, 0).offset;
+    final lastBottom =
+        viewport.getOffsetToReveal(lastBox!, 0).offset + lastBox.size.height;
+    final perCard = (lastBottom - firstTop) / (last - first + 1);
+    final guess = idx > last
+        ? lastBottom + (idx - last - 1) * perCard
+        : firstTop - (first - idx) * perCard;
+    _scroll.jumpTo((guess - position.viewportDimension / 2)
+        .clamp(position.minScrollExtent, position.maxScrollExtent));
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _reveal(items, idx, attempt + 1));
   }
 
   /// Below this many topics on screen, another page is fetched without
@@ -133,6 +205,19 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
 
   @override
   Widget build(BuildContext context) {
+    // The same moves, asked for by the app's keyboard while the list itself
+    // does not have focus — the reader clicked into the thread, say.
+    ref.listen(listCommandProvider(widget.site), (_, command) {
+      switch (command?.kind) {
+        case ListCommand.next:
+          _move(1);
+        case ListCommand.previous:
+          _move(-1);
+        case ListCommand.refresh:
+          ref.read(feedProvider(_key).notifier).refresh();
+        case null:
+      }
+    });
     final feed = ref.watch(visibleFeedProvider(_key));
     final stack = ref.watch(detailStackProvider(widget.site));
     final selectedId = stack.isEmpty ? null : stack.first.id;
@@ -192,10 +277,16 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
                     );
                   }
                   final t = state.items[i];
+                  final fresh =
+                      readLog.newReplies(widget.site, t.id, t.replyCount);
                   return TopicCard(
+                    key: _cardKeys.putIfAbsent(t.id, GlobalKey.new),
                     topic: t,
                     selected: t.id == selectedId,
-                    read: readLog.contains(widget.site, t.id),
+                    // A thread with something new in it is worth reading
+                    // again, so it is not dimmed like one that has nothing.
+                    read: readLog.contains(widget.site, t.id) && fresh == 0,
+                    newReplies: fresh,
                     images: images,
                     onTap: () {
                       _focus.requestFocus();
@@ -250,11 +341,15 @@ class TopicCard extends StatefulWidget {
     required this.selected,
     required this.onTap,
     this.read = false,
+    this.newReplies = 0,
     this.images = SiteImages.plain,
     this.onMenu,
   });
   final TopicSummary topic;
   final bool selected;
+
+  /// Replies that arrived since the reader last opened this topic.
+  final int newReplies;
 
   /// Already opened. Shown by dimming, the way a read message list does it.
   final bool read;
@@ -327,8 +422,24 @@ class _TopicCardState extends State<TopicCard> {
                         letterSpacing: -0.1,
                         color: ink)),
               ),
+              if (widget.newReplies > 0) ...[
+                const SizedBox(width: 10),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '+${compactCount(widget.newReplies)}',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      height: 1.1,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: selected ? p.accentInk : p.mint,
+                    ),
+                  ),
+                ),
+              ],
               if (t.replyCount != null) ...[
-                const SizedBox(width: 12),
+                SizedBox(width: widget.newReplies > 0 ? 6 : 12),
                 Padding(
                   padding: const EdgeInsets.only(top: 1),
                   child: _Count(

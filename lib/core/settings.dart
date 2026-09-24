@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'block_list.dart';
 import 'disk_cache.dart';
 import 'models.dart';
+import 'secret_store.dart';
 import 'util.dart';
 
 /// The cookie Cloudflare grants for passing its challenge.
@@ -148,17 +150,48 @@ class AppSettings {
   /// empty credentials and then has to correct itself.
   static AppSettings bootstrap = const AppSettings();
 
+  /// The settings that sign the reader in somewhere. They go to the system's
+  /// secret store; everything else stays in preferences.
+  static const _credentialKeys = ['v2exToken', 'linuxdoCookie', 'juejinCookie'];
+
+  Map<String, String> get _credentials => {
+        'v2exToken': v2exToken,
+        'linuxdoCookie': linuxdoCookie,
+        'juejinCookie': juejinCookie,
+      };
+
+  /// What each credential is known to be where it is kept, as of the last
+  /// load or save.
+  ///
+  /// A save only writes the credentials that differ from this. Most saves are
+  /// about something else — a theme, a switch — and a secret store that could
+  /// not be read at launch (the reader said no to the Keychain's prompt) has
+  /// left an empty string standing in for a credential that is still there.
+  /// Writing that back would delete it.
+  static Map<String, String> _kept = {};
+
+  /// For tests, which swap the stores out from under the app between cases.
+  @visibleForTesting
+  static void forgetWhatIsKept() => _kept = {};
+
   static Future<AppSettings> load() async {
     final p = await SharedPreferences.getInstance();
-    final hidden = p.getStringList('hiddenSites') ?? const [];
+    // Nothing stored means nobody has chosen yet. linux.do then starts off on
+    // Linux, where it cannot be read at all; switching it on stays possible.
+    final hidden = p.getStringList('hiddenSites') ??
+        [if (defaultTargetPlatform == TargetPlatform.linux) SiteId.linuxdo.name];
+    final credentials = {
+      for (final key in _credentialKeys) key: await _loadCredential(p, key),
+    };
+    _kept = credentials;
     return AppSettings(
-      v2exToken: p.getString('v2exToken') ?? '',
+      v2exToken: credentials['v2exToken']!,
       v2exProxy: p.getString('v2exProxy') ?? '',
       v2exProxyImages: p.getBool('v2exProxyImages') ?? true,
       v2exSeenNotification: p.getInt('v2exSeenNotification') ?? 0,
-      linuxdoCookie: p.getString('linuxdoCookie') ?? '',
+      linuxdoCookie: credentials['linuxdoCookie']!,
       linuxdoUserAgent: p.getString('linuxdoUserAgent') ?? kDesktopUserAgent,
-      juejinCookie: p.getString('juejinCookie') ?? '',
+      juejinCookie: credentials['juejinCookie']!,
       themeMode: p.getString('themeMode') ?? 'system',
       cacheLimit: p.getInt('cacheLimit') ?? kDefaultCacheLimit,
       // Read as an intersection, so a name from a newer version — or a
@@ -183,24 +216,64 @@ class AppSettings {
     );
   }
 
+  /// One credential, from wherever it is.
+  ///
+  /// One still in preferences is the newest there is: it was either written
+  /// before credentials moved, or written there because the secret store
+  /// could not take it. Either way it is moved across now, and only taken out
+  /// of preferences once the store has handed it back unchanged.
+  static Future<String> _loadCredential(SharedPreferences p, String key) async {
+    final plain = p.getString(key);
+    if (plain != null) {
+      await _keep(p, key, plain);
+      return plain;
+    }
+    try {
+      return await SecretStore.instance.read(key) ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Puts one credential in the secret store, or in preferences if the store
+  /// will not have it — a credential kept in the clear is better than one
+  /// lost.
+  static Future<void> _keep(SharedPreferences p, String key, String value) async {
+    try {
+      final store = SecretStore.instance;
+      if (value.isEmpty) {
+        await store.delete(key);
+      } else {
+        await store.write(key, value);
+        // A store can take a write and keep nothing; only what reads back
+        // counts as kept.
+        if (await store.read(key) != value) throw StateError('$key not kept');
+      }
+      await p.remove(key);
+    } catch (_) {
+      await p.setString(key, value);
+    }
+  }
+
   Future<void> save() async {
     final p = await SharedPreferences.getInstance();
+    final credentials = _credentials;
     // The keys are independent, so they go out together rather than as ten
     // platform round trips in a row.
     await Future.wait([
-      p.setString('v2exToken', v2exToken),
       p.setString('v2exProxy', v2exProxy),
       p.setBool('v2exProxyImages', v2exProxyImages),
       p.setInt('v2exSeenNotification', v2exSeenNotification),
-      p.setString('linuxdoCookie', linuxdoCookie),
       p.setString('linuxdoUserAgent', linuxdoUserAgent),
-      p.setString('juejinCookie', juejinCookie),
       p.setString('themeMode', themeMode),
       p.setInt('cacheLimit', cacheLimit),
       p.setStringList('hiddenSites', [for (final s in hiddenSites) s.name]),
       p.setStringList('blockedKeywords', [...blocks.keywords]),
       p.setStringList('blockedAuthors', [...blocks.authors]),
       p.setStringList('blockedSections', [...blocks.sections]),
+      for (final MapEntry(:key, :value) in credentials.entries)
+        if (_kept[key] != value) _keep(p, key, value),
     ]);
+    _kept = credentials;
   }
 }
