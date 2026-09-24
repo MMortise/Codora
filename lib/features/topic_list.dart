@@ -130,12 +130,61 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
                   );
                 },
               ),
-              if (feed.isLoading)
+              if (feed.isLoading || state.refreshing)
                 const Positioned(
                     left: 0, right: 0, top: 0, child: LinearProgressIndicator()),
+              if (state.refreshError case final problem?)
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  bottom: 8,
+                  child: _StaleNote(
+                    savedAt: state.savedAt,
+                    problem: problem,
+                    onRetry: () =>
+                        ref.read(feedProvider(_key).notifier).refresh(),
+                  ),
+                ),
             ]);
           },
         ),
+      ),
+    );
+  }
+}
+
+/// Says that the list on screen is not the site's latest, and why.
+class _StaleNote extends StatelessWidget {
+  const _StaleNote(
+      {required this.savedAt, required this.problem, required this.onRetry});
+
+  /// When the copy on screen was saved, if it came from disk.
+  final DateTime? savedAt;
+  final String problem;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final when = savedAt == null ? '' : '显示的是${relativeTime(savedAt)}保存的列表。';
+    return Material(
+      color: p.raised,
+      elevation: 3,
+      shadowColor: Colors.black26,
+      borderRadius: BorderRadius.circular(Radii.card),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+        child: Row(children: [
+          Icon(Icons.cloud_off_rounded, size: 15, color: p.inkMuted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text('$when没能刷新：$problem',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, height: 1.35, color: p.inkMuted)),
+          ),
+          TextButton(onPressed: onRetry, child: const Text('重试')),
+        ]),
       ),
     );
   }

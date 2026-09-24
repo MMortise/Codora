@@ -68,7 +68,7 @@ class CachePanel extends ConsumerWidget {
         ]),
         const SizedBox(height: 4),
         Text(
-          '图片存在本地，下次就不用再下一遍。超过上限时，最久没看过的先被丢掉。',
+          '图片和最近看过的帖子存在本地，下次就不用再下一遍，连不上站点时也有东西可看。超过上限时，最久没看过的先被丢掉。',
           style: text.bodySmall,
         ),
         const SizedBox(height: 16),
@@ -126,10 +126,11 @@ class CachePanel extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('会清掉这三样：', style: TextStyle(fontSize: 13)),
+            const Text('会清掉这几样：', style: TextStyle(fontSize: 13)),
             const SizedBox(height: 10),
             for (final line in const [
               '图片 — 会重新下载，只是慢一点',
+              '帖子 — 打开时要等站点回应，连不上时就看不到之前的了',
               '网页缓存 — linux.do 的页面要重新下载；人机验证和登录都留着',
               '阅读记录 — 读过的帖子会重新变成未读',
             ])
@@ -153,6 +154,7 @@ class CachePanel extends ConsumerWidget {
     if (ok != true) return;
 
     await DiskCache.instance.clear();
+    await DiskCache.pages.clear();
     // Only the pages. `clearAllCache` takes WebKit's memory, disk, fetch and
     // offline caches and nothing else — cookies, local storage and the
     // Cloudflare clearance stay where they are. That is why the dialog above
@@ -366,6 +368,7 @@ extension on CacheKind {
   /// as part of the app in both themes.
   Color tone(Palette p) => switch (this) {
         CacheKind.images => p.accent,
+        CacheKind.pages => p.rose,
         CacheKind.web => p.mint,
         CacheKind.readLog => p.cream,
       };
