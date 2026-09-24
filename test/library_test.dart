@@ -53,7 +53,10 @@ class _Searchable extends FakeSource {
   SearchTopics? get search => (query, {cursor}) async {
         queries.add((query, cursor));
         return PageResult(
-          items: [_topic('s${cursor ?? 0}', '关于 $query 的帖子')],
+          items: [
+            _topic('s${cursor ?? 0}',
+                cursor == null ? '关于 $query 的帖子' : '关于 $query 的第 $cursor 页'),
+          ],
           nextCursor: cursor == null ? '2' : null,
         );
       };
