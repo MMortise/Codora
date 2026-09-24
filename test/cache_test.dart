@@ -16,6 +16,7 @@ const _gb = 1024 * 1024 * 1024;
 
 CacheReport reportOf({
   int images = 0,
+  int pages = 0,
   int web = 0,
   int readLog = 0,
   int limit = kDefaultCacheLimit,
@@ -24,6 +25,7 @@ CacheReport reportOf({
     CacheReport(
       sizes: {
         CacheKind.images: images,
+        CacheKind.pages: pages,
         CacheKind.web: web,
         CacheKind.readLog: readLog,
       },
@@ -153,7 +155,12 @@ void main() {
 
     testWidgets('a full cache does not overflow the bar', (tester) async {
       await show(tester,
-          reportOf(images: 9 * _gb, web: _gb, readLog: 32, limit: 10 * _gb));
+          reportOf(
+              images: 9 * _gb,
+              pages: 64,
+              web: _gb,
+              readLog: 32,
+              limit: 10 * _gb));
       final bar = tester.getSize(find.byType(_barType)).width;
       final used = CacheKind.values
           .map((k) => sliceOf(tester, k))

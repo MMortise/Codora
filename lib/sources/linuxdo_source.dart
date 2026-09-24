@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, visibleForTesting;
 
 import '../core/forum_source.dart';
 import '../core/http.dart';
@@ -23,6 +24,22 @@ class LinuxDoSource implements ForumSource {
   final String cookie;
   final String userAgent;
 
+  /// Whether this platform has a browser to read the site through.
+  ///
+  /// Everything here goes through a WebView, because the challenge's
+  /// clearance only works from the browser that earned it — and the WebView
+  /// plugin has no Linux implementation. On Linux the site is not slow or
+  /// half-working but simply unreachable, and saying so plainly beats a
+  /// button into a browser that is not there.
+  static bool get supported => defaultTargetPlatform != TargetPlatform.linux;
+
+  static const unsupportedMessage =
+      'Linux 版读不了 linux.do：它要靠内置浏览器通过 Cloudflare 验证，'
+      '而 Linux 上还没有能用的内置浏览器。';
+
+  /// Signed in, on a platform where that can be used.
+  bool get _signedIn => supported && cookieHeaderHas(cookie, kLinuxdoSignIn);
+
   static final _origin = Uri.parse('https://linux.do');
 
   Map<int, String> _categoryNames = {};
@@ -39,11 +56,14 @@ class LinuxDoSource implements ForumSource {
   @override
   Uri get homeUrl => Uri.parse('https://linux.do');
   @override
-  String get accessNote => '整站有 Cloudflare 人机验证。用内置浏览器过一次验证，通过后可以直接登录。'
+  String get accessNote => supported ? _accessNote : unsupportedMessage;
+
+  static const _accessNote = '整站有 Cloudflare 人机验证。用内置浏览器过一次验证，通过后可以直接登录。'
       'passkey 和 Google 登录在内嵌浏览器里用不了（前者要站点授权，后者被 Google 拦），'
       '这种情况在系统浏览器里登录，把 _t 这个 Cookie 复制到下面「手动填写」里。';
   @override
   SiteAccess get access {
+    if (!supported) return const SiteAccess(AccessLevel.blocked, '此平台不支持');
     if (!cookieHeaderHas(cookie, 'cf_clearance')) {
       return const SiteAccess(AccessLevel.blocked, '待验证');
     }
@@ -65,7 +85,7 @@ class LinuxDoSource implements ForumSource {
   // API, so they are fetched through the WebView rather than with headers a
   // plain request could send.
   @override
-  late final SiteImages images = cookie.isEmpty
+  late final SiteImages images = cookie.isEmpty || !supported
       ? SiteImages.plain
       : SiteImages(
           loader: (url) => needsBrowser(url)
@@ -79,7 +99,7 @@ class LinuxDoSource implements ForumSource {
   // site's own rather than a mark this app keeps.
   @override
   Future<Member> Function()? get member =>
-      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _fetchMember : null;
+      _signedIn ? _fetchMember : null;
 
   /// Held to [kMemberDeadline] like every other site. This one needs it
   /// most: the request goes through a WebView that can sit behind an expired
@@ -431,21 +451,21 @@ class LinuxDoSource implements ForumSource {
   // there is nothing to send with.
   @override
   SendReply? get reply =>
-      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _reply : null;
+      _signedIn ? _reply : null;
 
   // Discourse counts a like as an action on a post, and taking one back as
   // the removal of that action. Both go out over the session the reading
   // already uses.
   @override
   ActOnLike? get like =>
-      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _like : null;
+      _signedIn ? _like : null;
 
   // Discourse takes a picture before the post that shows it exists: its own
   // composer hands the file over, is told a short address for it, and writes
   // that into the body. Nothing here departs from that.
   @override
   UploadImage? get uploadImage =>
-      cookieHeaderHas(cookie, kLinuxdoSignIn) ? _uploadImage : null;
+      _signedIn ? _uploadImage : null;
 
   Future<LikeState> _like(String postId, {required bool like}) async {
     _requireCookie();
@@ -836,10 +856,15 @@ class LinuxDoSource implements ForumSource {
       p['username'] == null ? null : _author(p);
 
   void _requireCookie() {
+    _requireSupported();
     if (!cookieHeaderHas(cookie, 'cf_clearance')) {
       throw AuthRequiredException(
           id, '需要先完成 linux.do 的人机验证', AuthRecovery.browser);
     }
+  }
+
+  void _requireSupported() {
+    if (!supported) throw Exception(unsupportedMessage);
   }
 
   /// [fresh] for a read whose whole point is that it is current — what the
@@ -866,6 +891,7 @@ class LinuxDoSource implements ForumSource {
             },
           ).toString();
 
+    _requireSupported();
     final Object? data;
     try {
       data = await WebViewFetcher.instance

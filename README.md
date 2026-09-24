@@ -2,12 +2,41 @@
 
 一个桌面端论坛聚合阅读器，把 V2EX、linux.do、掘金放进同一个界面里读。macOS 为主，同时保留 Windows 和 Linux 平台目录。
 
-## 运行
+## 下载安装
+
+到 [Releases](https://github.com/MMortise/Codora/releases) 下载最新的 `Codora-<版本>-macos.zip`，解压后把 `codora.app` 拖进「应用程序」。
+
+如果那个版本没有经过公证，第一次打开时 macOS 会拦下来：在 Finder 里右键 `codora.app` 选「打开」，再确认一次即可，之后正常双击就行。
+
+应用里「设置 → 常规」会显示当前版本，并检查 Releases 上有没有更新的版本，有的话点「前往下载」。
+
+## 从源码运行
+
+需要 Flutter 3.41.7（`.metadata` 里记录的版本）。
 
 ```bash
 flutter pub get
 flutter run -d macos
 ```
+
+V2EX Token 和两个站的 Cookie 存在系统自己的密钥存储里：macOS 是钥匙串，Windows 是凭据管理器，Linux 是 Secret Service，所以在 Linux 上构建要先装 `libsecret-1-dev`。
+密钥存储用不了时（比如没有运行密钥环服务），凭据退回到普通设置里保存，不会丢；等密钥存储能用了，下次启动会自动搬过去。
+
+## 平台支持
+
+macOS 是主平台，所有功能都在上面验证过。Windows 和 Linux 能构建，但情况不同：
+
+| 站点 / 功能 | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| V2EX 浏览、个人卡片 | ✅ | 未实测 | 未实测 |
+| 掘金浏览 | ✅ | 未实测 | 未实测 |
+| linux.do 浏览 | ✅ | 未实测 | ❌ 不支持 |
+| linux.do 登录、回复、点赞、传图 | ✅ | 未实测 | ❌ 不支持 |
+
+linux.do 的每个请求都要经过内置浏览器（见下面「各站怎么接的」），而 `flutter_inappwebview` 没有 Linux 实现。
+所以在 Linux 上，这个站在设置里标为「此平台不支持」，默认不显示在左侧。硬打开的话，列表会直接说明原因，不会让你去点一个不存在的浏览器。
+
+Windows 上用的是 WebView2。Cloudflare 的验证凭据跟浏览器的 TLS 指纹绑定，WebView2 能不能过验证、Cookie 能不能在应用和内置浏览器之间同步，都还没在真机上验证过。
 
 ## 界面
 
@@ -94,6 +123,20 @@ flutter test --dart-define=LIVE=true test/sources_live_test.dart
 
 [test/fixtures](test/fixtures) 里存了三个站各自的真实正文，用来离线验证渲染器吃得下真实内容，
 换新样本的命令写在那个目录的说明里。
+
+## 持续集成与发布
+
+- [ci.yml](.github/workflows/ci.yml)：每个 PR 和推到 `main` 的提交都会跑 `flutter analyze` 和 `flutter test`。
+- [release.yml](.github/workflows/release.yml)：推一个 `v` 开头的标签（例如 `git tag v0.2.0 && git push origin v0.2.0`），就会在 macOS 上构建、打成 zip、发布到 Releases。版本号取自标签，构建号取自这次运行的序号。
+
+签名和公证是可选的。在仓库 Secrets 里配好下面这些，发布出去的就是签过名、公证过的包；缺了就发布 ad-hoc 签名的包：
+
+| Secret | 内容 |
+| --- | --- |
+| `MACOS_CERTIFICATE` | Developer ID Application 证书导出的 .p12，base64 编码 |
+| `MACOS_CERTIFICATE_PASSWORD` | 导出 .p12 时设的密码 |
+| `MACOS_SIGNING_IDENTITY` | 证书名，例如 `Developer ID Application: Name (TEAMID)` |
+| `NOTARY_APPLE_ID` / `NOTARY_TEAM_ID` / `NOTARY_PASSWORD` | 公证用的 Apple ID、团队 ID 和 App 专用密码 |
 
 ## 品牌
 

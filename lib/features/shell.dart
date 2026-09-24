@@ -36,6 +36,7 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final nav = ref.watch(currentNavProvider);
     final sites = ref.watch(visibleSiteIdsProvider);
+    ref.watch(rememberPlaceProvider);
 
     // Only the sites on the rail are built. A stack holding all of them would
     // keep a switched-off site fetching its boards in the background, which is
@@ -243,7 +244,12 @@ class SitePage extends ConsumerWidget {
     final sectionsAsync = ref.watch(sectionsProvider(site));
     final selected = ref.watch(selectedSectionProvider(site));
     final sections = sectionsAsync.valueOrNull ?? const <Section>[];
-    final sectionId = selected ?? (sections.isNotEmpty ? sections.first.id : null);
+    // A board remembered from last time is only used once the site confirms
+    // it still has one by that name; until the list is in, nothing is asked
+    // for rather than a board that may be gone.
+    final sectionId = sections.any((s) => s.id == selected)
+        ? selected
+        : (sections.isNotEmpty ? sections.first.id : null);
     // A search, while there is one, stands in the list's place; the board
     // underneath is still the one to go back to.
     final query = ref.watch(searchQueryProvider(site));
