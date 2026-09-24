@@ -691,6 +691,73 @@ class LinuxDoSource implements ForumSource {
     return null;
   }
 
+  // Discourse's own full-page search, over the same session as the feed —
+  // so only once there is a session to use.
+  @override
+  SearchTopics? get search =>
+      cookieHeaderHas(cookie, kLinuxdoClearance) ? _search : null;
+
+  @override
+  Uri? searchPage(String query) => null;
+
+  Future<PageResult<TopicSummary>> _search(String query,
+      {String? cursor}) async {
+    _requireCookie();
+    final page = int.tryParse(cursor ?? '') ?? 1;
+    if (_categoryNames.isEmpty) await _loadCategories();
+    final res = await _get('/search.json', query: {'q': query, 'page': '$page'});
+    return parseSearch(res, page: page);
+  }
+
+  /// A page of Discourse search results.
+  ///
+  /// The matching posts come in order of relevance and the topics they belong
+  /// to in a list of their own, so each topic is placed where its first
+  /// matching post stands, and takes that post's excerpt and author: the
+  /// sentence that matched says more than the topic's opening lines.
+  @visibleForTesting
+  PageResult<TopicSummary> parseSearch(Map res, {int page = 1}) {
+    final topics = <int, Map>{
+      for (final t in (res['topics'] as List? ?? const []).whereType<Map>())
+        ?asInt(t['id']): t,
+    };
+    final firstPost = <int, Map>{};
+    final order = <int>[];
+    for (final p in (res['posts'] as List? ?? const []).whereType<Map>()) {
+      final topicId = asInt(p['topic_id']);
+      if (topicId == null || firstPost.containsKey(topicId)) continue;
+      firstPost[topicId] = p;
+      order.add(topicId);
+    }
+    for (final id in topics.keys) {
+      if (!order.contains(id)) order.add(id);
+    }
+    final items = <TopicSummary>[];
+    for (final id in order) {
+      final t = topics[id];
+      if (t == null) continue;
+      final post = firstPost[id];
+      items.add(TopicSummary(
+        site: this.id,
+        id: '$id',
+        title: '${t['fancy_title'] ?? t['title']}',
+        url: 'https://linux.do/t/${t['slug']}/$id',
+        excerpt: htmlToPreview(post?['blurb']?.toString()),
+        author: post == null ? null : _postAuthor(post),
+        sectionLabel: _categoryNames[asInt(t['category_id'])],
+        replyCount: (asInt(t['posts_count']) ?? 1) - 1,
+        likeCount: asInt(t['like_count']),
+        createdAt: fromIso(t['created_at']),
+        lastActiveAt: fromIso(t['bumped_at'] ?? t['last_posted_at']),
+      ));
+    }
+    final more = (res['grouped_search_result'] as Map?)?['more_full_page_results'];
+    return PageResult(
+      items: items,
+      nextCursor: more == true ? '${page + 1}' : null,
+    );
+  }
+
   @override
   String? topicIdFromUrl(Uri uri) {
     if (uri.host != 'linux.do' && !uri.host.endsWith('.linux.do')) return null;

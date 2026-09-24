@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
@@ -9,6 +10,7 @@ import '../widgets/chrome.dart';
 import '../widgets/hover_flyout.dart';
 import '../widgets/site_icon.dart';
 import '../widgets/swap.dart';
+import 'library_page.dart';
 import 'member_card.dart';
 import 'providers.dart';
 import 'settings_page.dart';
@@ -44,11 +46,14 @@ class AppShell extends ConsumerWidget {
         const _Rail(),
         Expanded(
           child: IndexedStack(
-            index: nav == NavTarget.settings
-                ? sites.length
-                : sites.indexOf(nav.site!),
+            index: switch (nav) {
+              NavTarget.library => sites.length,
+              NavTarget.settings => sites.length + 1,
+              _ => sites.indexOf(nav.site!),
+            },
             children: [
               for (final site in sites) _pageFor(site),
+              const LibraryPage(),
               const SettingsPage(),
             ],
           ),
@@ -120,6 +125,12 @@ class _Rail extends ConsumerWidget {
                 ref.read(navProvider.notifier).state = source.id.target,
           ),
         const Spacer(),
+        _RailBlock(
+          icon: const Icon(Icons.bookmark_outline_rounded, size: 18),
+          label: '收藏和历史',
+          selected: nav == NavTarget.library,
+          onTap: () => ref.read(navProvider.notifier).state = NavTarget.library,
+        ),
         _RailBlock(
           icon: const Icon(Icons.tune_rounded, size: 18),
           label: '设置',
@@ -239,21 +250,26 @@ class SitePage extends ConsumerWidget {
     final sectionId = sections.any((s) => s.id == selected)
         ? selected
         : (sections.isNotEmpty ? sections.first.id : null);
+    // A search, while there is one, stands in the list's place; the board
+    // underneath is still the one to go back to.
+    final query = ref.watch(searchQueryProvider(site));
+    final listId = query == null ? sectionId : searchSectionId(query);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Padding(
         padding: const EdgeInsets.only(left: kGutter),
-        child: _TopBar(site: site, sectionId: sectionId),
+        child: _TopBar(site: site, sectionId: listId),
       ),
       _SectionBlocks(
         site: site,
         sections: sections,
-        selectedId: sectionId,
+        selectedId: query == null ? sectionId : null,
         loading: sectionsAsync.isLoading,
       ),
       Expanded(
         child: LayoutBuilder(builder: (context, constraints) {
           final wide = constraints.maxWidth >= 940;
+          final sectionId = listId;
           if (sectionId == null) {
             return Center(
               child: sectionsAsync.isLoading
@@ -342,6 +358,8 @@ class _TopBar extends ConsumerWidget {
                     color: p.inkMuted)),
           ),
           const Spacer(),
+          if (source.search != null || source.searchPage('') != null)
+            _SearchBox(site: site),
           QuietIconButton(
             icon: Icons.refresh_rounded,
             tooltip: '刷新列表',
@@ -358,6 +376,105 @@ class _TopBar extends ConsumerWidget {
           ),
           const SizedBox(width: 12),
         ]),
+      ),
+    );
+  }
+}
+
+/// A search field that stays a button until it is wanted.
+///
+/// A site the app can search shows the results in place of the board; one it
+/// cannot — V2EX has no search to call — hands the words to a search engine
+/// in the browser instead.
+class _SearchBox extends ConsumerStatefulWidget {
+  const _SearchBox({required this.site});
+  final SiteId site;
+
+  @override
+  ConsumerState<_SearchBox> createState() => _SearchBoxState();
+}
+
+class _SearchBoxState extends ConsumerState<_SearchBox> {
+  final _text = TextEditingController();
+  final _focus = FocusNode(debugLabel: 'search');
+  bool _open = false;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _submit(String value) {
+    final query = value.trim();
+    if (query.isEmpty) return;
+    final source = ref.read(sourceProvider(widget.site));
+    if (source.search != null) {
+      ref.read(searchQueryProvider(widget.site).notifier).state = query;
+    } else if (source.searchPage(query) case final page?) {
+      launchUrl(page);
+    }
+  }
+
+  void _close() {
+    _text.clear();
+    ref.read(searchQueryProvider(widget.site).notifier).state = null;
+    setState(() => _open = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final query = ref.watch(searchQueryProvider(widget.site));
+    final source = ref.watch(sourceProvider(widget.site));
+    if (!_open && query == null) {
+      return QuietIconButton(
+        icon: Icons.search_rounded,
+        tooltip: '搜索 ${source.name}',
+        onPressed: () {
+          setState(() => _open = true);
+          _focus.requestFocus();
+        },
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: SizedBox(
+        width: 240,
+        height: kControlHeight,
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): _close,
+          },
+          child: TextField(
+            controller: _text,
+            focusNode: _focus,
+            style: const TextStyle(fontSize: 13),
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: source.search != null
+                  ? '搜索 ${source.name}'
+                  : '用必应搜索 ${source.name}',
+              prefixIcon: Icon(Icons.search_rounded, size: 16, color: p.inkFaint),
+              prefixIconConstraints:
+                  const BoxConstraints(minWidth: 32, minHeight: 32),
+              suffixIcon: IconButton(
+                tooltip: '关闭搜索',
+                icon: const Icon(Icons.close_rounded, size: 15),
+                onPressed: _close,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+              ),
+              suffixIconConstraints:
+                  const BoxConstraints(minWidth: 30, minHeight: 30),
+            ),
+            onSubmitted: _submit,
+            // Stays in the field, so the words can be changed and searched
+            // again — or the search closed with escape.
+            onEditingComplete: () {},
+          ),
+        ),
       ),
     );
   }
@@ -385,8 +502,11 @@ class _SectionBlocks extends ConsumerWidget {
     for (final s in sections) {
       if (s.group != null) groups.putIfAbsent(s.group!, () => []).add(s);
     }
-    void select(String id) =>
-        ref.read(selectedSectionProvider(site).notifier).state = id;
+    void select(String id) {
+      // Picking a board is leaving the search for it.
+      ref.read(searchQueryProvider(site).notifier).state = null;
+      ref.read(selectedSectionProvider(site).notifier).state = id;
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(kGutter, 0, kGutter, 14),

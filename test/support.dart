@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:codora/app_theme.dart';
 import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/last_place.dart';
+import 'package:codora/core/library.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/read_log.dart';
 import 'package:codora/core/secret_store.dart';
@@ -28,6 +29,7 @@ void resetBootstrapState() {
     ReadLog.bootstrap = ReadLog.bootstrap.cleared();
     Snapshots.instance = memorySnapshots();
     LastPlace.bootstrap = const LastPlace();
+    Library.bootstrap = const Library();
   });
   tearDown(() => AppSettings.bootstrap = const AppSettings());
 }
@@ -148,6 +150,10 @@ class FakeSource implements ForumSource {
   @override
   Future<PageResult<Reply>> fetchReplies(String id, {String? cursor}) =>
       throw UnimplementedError();
+  @override
+  SearchTopics? get search => null;
+  @override
+  Uri? searchPage(String query) => null;
   @override
   String? topicIdFromUrl(Uri uri) => null;
 }
