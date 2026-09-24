@@ -18,6 +18,7 @@ import '../widgets/relative_time.dart';
 import '../widgets/reveal.dart';
 import '../widgets/swap.dart';
 import 'pick_pictures.dart';
+import 'keyboard.dart';
 import 'providers.dart';
 import 'reply_box.dart';
 
@@ -64,6 +65,10 @@ class _EmptyDetail extends StatelessWidget {
           const _Key('K'),
           const SizedBox(width: 9),
           Text('上下切换', style: TextStyle(fontSize: 12, color: p.inkFaint)),
+          const SizedBox(width: 16),
+          const _Key('?'),
+          const SizedBox(width: 9),
+          Text('全部快捷键', style: TextStyle(fontSize: 12, color: p.inkFaint)),
         ]),
       ]),
     );
@@ -329,6 +334,66 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     _scroll.animateTo(0, duration: Motion.swap, curve: Motion.curve);
   }
 
+  /// How much of a screen a page turn moves: most of one, so the last lines
+  /// read are still there at the top to pick up from.
+  static const _pageTurn = 0.88;
+
+  void _scrollBy(double screens) {
+    if (!_scroll.hasClients) return;
+    final position = _scroll.position;
+    final target = (position.pixels + position.viewportDimension * screens)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    _scroll.animateTo(target, duration: Motion.swap, curve: Motion.curve);
+  }
+
+  void _scrollToBottom() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(_scroll.position.maxScrollExtent,
+        duration: Motion.swap, curve: Motion.curve);
+  }
+
+  String? get _url => ref.read(topicDetailProvider(widget.topic)).valueOrNull?.url;
+
+  void _copyLink() {
+    final url = _url;
+    if (url == null) return;
+    final p = context.palette;
+    Clipboard.setData(ClipboardData(text: url));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: const Text('链接已复制'),
+      backgroundColor: p.raised,
+      duration: const Duration(seconds: 1),
+      behavior: SnackBarBehavior.floating,
+      width: 200,
+    ));
+  }
+
+  void _openInBrowser() {
+    final url = _url;
+    if (url == null) return;
+    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
+  void _obey(Command<DetailCommand>? command) {
+    switch (command?.kind) {
+      case DetailCommand.pageDown:
+        _scrollBy(_pageTurn);
+      case DetailCommand.pageUp:
+        _scrollBy(-_pageTurn);
+      case DetailCommand.top:
+        _scrollToTop();
+      case DetailCommand.bottom:
+        _scrollToBottom();
+      case DetailCommand.reload:
+        _reload();
+      case DetailCommand.copyLink:
+        _copyLink();
+      case DetailCommand.openInBrowser:
+        _openInBrowser();
+      case null:
+    }
+  }
+
   @override
   void dispose() {
     _scroll.dispose();
@@ -416,6 +481,7 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(detailCommandProvider(widget.topic.site), (_, c) => _obey(c));
     final p = context.palette;
     final detail = ref.watch(topicDetailProvider(widget.topic));
     final replies = ref.watch(repliesProvider(widget.topic));
@@ -450,25 +516,12 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
           QuietIconButton(
             icon: Icons.link_rounded,
             tooltip: '复制链接',
-            onPressed: url == null
-                ? null
-                : () {
-                    Clipboard.setData(ClipboardData(text: url));
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: const Text('链接已复制'),
-                      backgroundColor: p.raised,
-                      duration: const Duration(seconds: 1),
-                      behavior: SnackBarBehavior.floating,
-                      width: 200,
-                    ));
-                  },
+            onPressed: url == null ? null : _copyLink,
           ),
           QuietIconButton(
             icon: Icons.north_east_rounded,
             tooltip: '在浏览器中打开',
-            onPressed: url == null
-                ? null
-                : () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+            onPressed: url == null ? null : _openInBrowser,
           ),
         ]),
       ),
