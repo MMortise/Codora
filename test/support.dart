@@ -6,6 +6,7 @@ import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/last_place.dart';
 import 'package:codora/core/library.dart';
 import 'package:codora/core/models.dart';
+import 'package:codora/core/notices.dart';
 import 'package:codora/core/read_log.dart';
 import 'package:codora/core/secret_store.dart';
 import 'package:codora/core/settings.dart';
@@ -30,6 +31,8 @@ void resetBootstrapState() {
     Snapshots.instance = memorySnapshots();
     LastPlace.bootstrap = const LastPlace();
     Library.bootstrap = const Library();
+    AnnouncedMarks.bootstrap = AnnouncedMarks.empty;
+    NoticeOutlet.instance = FakeOutlet();
   });
   tearDown(() => AppSettings.bootstrap = const AppSettings());
 }
@@ -201,4 +204,20 @@ class MemorySecretStore implements SecretStore {
     _check();
     values.remove(key);
   }
+}
+
+/// Announcements and the icon's count, written down instead of shown.
+class FakeOutlet implements NoticeOutlet {
+  final announced = <(SiteId, String, String)>[];
+  final badges = <int>[];
+
+  @override
+  ValueChanged<SiteId>? onOpen;
+
+  @override
+  Future<void> announce(SiteId site, String title, String body) async =>
+      announced.add((site, title, body));
+
+  @override
+  Future<void> badge(int count) async => badges.add(count);
 }

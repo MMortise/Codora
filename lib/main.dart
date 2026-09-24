@@ -9,6 +9,7 @@ import 'core/disk_cache.dart';
 import 'core/last_place.dart';
 import 'core/library.dart';
 import 'core/linuxdo_session.dart';
+import 'core/notices.dart';
 import 'core/read_log.dart';
 import 'core/settings.dart';
 import 'core/window_place.dart';
@@ -29,6 +30,7 @@ Future<void> main() async {
   ReadLog.bootstrap = await ReadLog.load();
   LastPlace.bootstrap = await LastPlace.load();
   Library.bootstrap = await Library.load();
+  AnnouncedMarks.bootstrap = await AnnouncedMarks.load();
   // Opened before the first frame so the first avatar already has somewhere
   // to look, and trimmed now in case the budget was lowered last time.
   await DiskCache.instance.prepare(budget: AppSettings.bootstrap.cacheLimit);

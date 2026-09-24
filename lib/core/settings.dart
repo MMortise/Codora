@@ -43,6 +43,7 @@ class AppSettings {
     this.cacheLimit = kDefaultCacheLimit,
     this.hiddenSites = const {},
     this.blocks = BlockList.empty,
+    this.quietSites = const {},
   });
   final String v2exToken;
 
@@ -79,6 +80,19 @@ class AppSettings {
 
   /// Topics kept out of every list.
   final BlockList blocks;
+  /// Sites whose new notices the reader does not want announced. Stored as
+  /// the exceptions, like [hiddenSites].
+  final Set<SiteId> quietSites;
+
+  bool announces(SiteId site) => !quietSites.contains(site);
+
+  AppSettings withAnnouncing(SiteId site, bool on) => copyWith(
+        quietSites: {
+          for (final s in quietSites)
+            if (s != site) s,
+          if (!on) site,
+        },
+      );
 
   bool get linuxdoReady => cookieHeaderHas(linuxdoCookie, kLinuxdoClearance);
   bool get linuxdoLoggedIn => cookieHeaderHas(linuxdoCookie, kLinuxdoSignIn);
@@ -130,6 +144,7 @@ class AppSettings {
     int? cacheLimit,
     Set<SiteId>? hiddenSites,
     BlockList? blocks,
+    Set<SiteId>? quietSites,
   }) =>
       AppSettings(
         v2exToken: v2exToken ?? this.v2exToken,
@@ -144,6 +159,7 @@ class AppSettings {
         cacheLimit: cacheLimit ?? this.cacheLimit,
         hiddenSites: hiddenSites ?? this.hiddenSites,
         blocks: blocks ?? this.blocks,
+        quietSites: quietSites ?? this.quietSites,
       );
 
   /// Loaded once before the first frame, so nothing ever renders against
@@ -213,6 +229,11 @@ class AppSettings {
             if (BlockList.parse(e) != null) e,
         },
       ),
+      quietSites: {
+        for (final site in SiteId.values)
+          if ((p.getStringList('quietSites') ?? const []).contains(site.name))
+            site,
+      },
     );
   }
 
@@ -273,6 +294,7 @@ class AppSettings {
       p.setStringList('blockedSections', [...blocks.sections]),
       for (final MapEntry(:key, :value) in credentials.entries)
         if (_kept[key] != value) _keep(p, key, value),
+      p.setStringList('quietSites', [for (final s in quietSites) s.name]),
     ]);
     _kept = credentials;
   }

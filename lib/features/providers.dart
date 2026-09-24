@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -9,6 +10,7 @@ import '../core/last_place.dart';
 import '../core/library.dart';
 import '../core/linuxdo_session.dart';
 import '../core/models.dart';
+import '../core/notices.dart';
 import '../core/read_log.dart';
 import '../core/settings.dart';
 import '../core/snapshot.dart';
@@ -257,6 +259,13 @@ const memberFreshFor = Duration(hours: 1);
 /// card wrong for far longer than the problem lasted.
 const memberRetryAfter = Duration(minutes: 1);
 
+/// How often a profile is read while its new notices are being announced.
+///
+/// An hour is fine for a tagline and far too long for "someone answered
+/// you". Ten minutes is quick enough to be worth a notification and slow
+/// enough that no forum would notice.
+const memberAnnounceEvery = Duration(minutes: 10);
+
 /// Who the stored credentials sign the reader in as.
 ///
 /// Loaded when the app opens rather than when a pointer arrives — see
@@ -287,7 +296,11 @@ class MemberNotifier extends AutoDisposeFamilyAsyncNotifier<Member, SiteId> {
     if (fetch == null) throw StateError('${arg.label} 现在没有可读的个人信息');
     try {
       final member = await fetch();
-      _again(memberFreshFor, reading);
+      _again(
+          ref.read(settingsProvider).announces(arg)
+              ? memberAnnounceEvery
+              : memberFreshFor,
+          reading);
       return member;
     } catch (_) {
       _again(memberRetryAfter, reading);
@@ -323,6 +336,64 @@ final loadedMembersProvider = Provider<List<SiteId>>((ref) {
   }
   return sites;
 });
+
+/// Announces new notices on each site with a profile, and keeps the count of
+/// unread ones on the app's icon.
+///
+/// Rides on the profiles the rail already keeps loaded, so it asks the sites
+/// for nothing of its own. Only a window that is not in front announces: one
+/// in front already shows the count on its card.
+final inboxWatcherProvider = Provider<void>((ref) {
+  final outlet = NoticeOutlet.instance;
+  outlet.onOpen = (site) => ref.read(navProvider.notifier).state = site.target;
+  final unread = <SiteId, int>{};
+
+  void recount() {
+    outlet.badge(unread.values.fold(0, (a, b) => a + b));
+  }
+
+  /// What the icon should count for [site], from its profile as it stands.
+  void count(SiteId site) {
+    final member = ref.read(memberProvider(site)).valueOrNull;
+    final settings = ref.read(settingsProvider);
+    unread[site] = member == null || !settings.announces(site)
+        ? 0
+        : unreadOf(member, settings.seenNotification(site));
+    recount();
+  }
+
+  for (final site in ref.watch(loadedMembersProvider)) {
+    ref.listen(memberProvider(site), (_, next) async {
+      final member = next.valueOrNull;
+      if (member == null || next.isLoading) return;
+      count(site);
+
+      final newest = member.newestNotification;
+      final mark = AnnouncedMarks.bootstrap.of(site);
+      if (mark != null && newest <= mark) return;
+      final a = mark == null ? null : announcementFor(site, member, mark);
+      // The mark moves before anything is said, and before anything is
+      // awaited, so a read landing meanwhile cannot say the same thing again.
+      AnnouncedMarks.bootstrap =
+          AnnouncedMarks.bootstrap.withMark(site, newest);
+      await AnnouncedMarks.bootstrap.save(site);
+      if (a != null && ref.read(settingsProvider).announces(site) &&
+          !_inFront()) {
+        await outlet.announce(site, a.title, a.body);
+      }
+    }, fireImmediately: true);
+    // Opening the inbox from the card, or switching a site's announcements,
+    // changes the count without a new read.
+    ref.listen(
+        settingsProvider.select(
+            (s) => (s.seenNotification(site), s.announces(site))),
+        (_, _) => count(site));
+  }
+  ref.onDispose(() => outlet.badge(0));
+});
+
+bool _inFront() =>
+    WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
 
 /// Every site in display order, including the ones switched off — the
 /// settings page lists all of them.
