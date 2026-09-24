@@ -118,10 +118,15 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
                     );
                   }
                   final t = state.items[i];
+                  final fresh =
+                      readLog.newReplies(widget.site, t.id, t.replyCount);
                   return TopicCard(
                     topic: t,
                     selected: t.id == selectedId,
-                    read: readLog.contains(widget.site, t.id),
+                    // A thread with something new in it is worth reading
+                    // again, so it is not dimmed like one that has nothing.
+                    read: readLog.contains(widget.site, t.id) && fresh == 0,
+                    newReplies: fresh,
                     images: images,
                     onTap: () {
                       _focus.requestFocus();
@@ -175,10 +180,14 @@ class TopicCard extends StatefulWidget {
     required this.selected,
     required this.onTap,
     this.read = false,
+    this.newReplies = 0,
     this.images = SiteImages.plain,
   });
   final TopicSummary topic;
   final bool selected;
+
+  /// Replies that arrived since the reader last opened this topic.
+  final int newReplies;
 
   /// Already opened. Shown by dimming, the way a read message list does it.
   final bool read;
@@ -245,8 +254,24 @@ class _TopicCardState extends State<TopicCard> {
                         letterSpacing: -0.1,
                         color: ink)),
               ),
+              if (widget.newReplies > 0) ...[
+                const SizedBox(width: 10),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '+${compactCount(widget.newReplies)}',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      height: 1.1,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: selected ? p.accentInk : p.mint,
+                    ),
+                  ),
+                ),
+              ],
               if (t.replyCount != null) ...[
-                const SizedBox(width: 12),
+                SizedBox(width: widget.newReplies > 0 ? 6 : 12),
                 Padding(
                   padding: const EdgeInsets.only(top: 1),
                   child: _Count(
