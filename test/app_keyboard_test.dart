@@ -167,6 +167,33 @@ void main() {
     });
   });
 
+  group('search', () {
+    int asked(ProviderContainer c) => c.read(searchRequestProvider(SiteId.v2ex));
+
+    testWidgets('⌘F asks the site on screen to search', (tester) async {
+      final c = await pumpKeyboard(tester, const SizedBox());
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      expect(asked(c), 1);
+    });
+
+    testWidgets('and so does /', (tester) async {
+      final c = await pumpKeyboard(tester, const SizedBox());
+      await tester.sendKeyEvent(LogicalKeyboardKey.slash, character: '/');
+      expect(asked(c), 1);
+    });
+
+    testWidgets('but not from settings', (tester) async {
+      final c = await pumpKeyboard(tester, const SizedBox());
+      c.read(navProvider.notifier).state = NavTarget.settings;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      expect(asked(c), 0);
+    });
+  });
+
   group('what the keyboard leaves alone', () {
     testWidgets('keys typed into a text field stay there', (tester) async {
       final text = TextEditingController();

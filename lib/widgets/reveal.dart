@@ -1,6 +1,8 @@
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
+import '../app_theme.dart';
+
 /// Scrolls [controller] until item [index] of [count] is on screen.
 ///
 /// The items are laid out lazily and are as tall as their contents, so no
@@ -41,8 +43,8 @@ void revealItem({
     }
     controller.animateTo(
       target.clamp(position.minScrollExtent, position.maxScrollExtent),
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
+      duration: Motion.swap,
+      curve: Motion.curve,
     );
     return;
   }

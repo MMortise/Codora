@@ -5,6 +5,7 @@ import 'package:codora/core/forum_source.dart';
 import 'package:codora/core/library.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/settings.dart';
+import 'package:codora/features/keyboard.dart';
 import 'package:codora/features/library_page.dart';
 import 'package:codora/features/providers.dart';
 import 'package:codora/features/shell.dart';
@@ -268,6 +269,22 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.read(searchQueryProvider(SiteId.v2ex)), isNull);
       expect(find.text('板块里的帖子'), findsOneWidget);
+      await disposeApp(tester, c);
+    });
+
+    testWidgets('opens and takes the cursor when the keyboard asks',
+        (tester) async {
+      final c = await pumpApp(
+        tester,
+        const SitePage(site: SiteId.v2ex),
+        size: const Size(1200, 800),
+        overrides: [sourceProvider(SiteId.v2ex).overrideWithValue(_Searchable())],
+      );
+      expect(find.byType(TextField), findsNothing);
+      c.read(searchRequestProvider(SiteId.v2ex).notifier).state++;
+      await tester.pumpAndSettle();
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.focusNode!.hasFocus, isTrue);
       await disposeApp(tester, c);
     });
 

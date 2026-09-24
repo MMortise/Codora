@@ -10,6 +10,7 @@ import '../widgets/chrome.dart';
 import '../widgets/hover_flyout.dart';
 import '../widgets/site_icon.dart';
 import '../widgets/swap.dart';
+import 'keyboard.dart';
 import 'library_page.dart';
 import 'member_card.dart';
 import 'providers.dart';
@@ -426,6 +427,16 @@ class _SearchBoxState extends ConsumerState<_SearchBox> {
 
   @override
   Widget build(BuildContext context) {
+    // ⌘F or / from anywhere in the app: open, and put the cursor in.
+    ref.listen(searchRequestProvider(widget.site), (_, _) {
+      setState(() => _open = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _focus.requestFocus();
+        _text.selection =
+            TextSelection(baseOffset: 0, extentOffset: _text.text.length);
+      });
+    });
     final p = context.palette;
     final query = ref.watch(searchQueryProvider(widget.site));
     final source = ref.watch(sourceProvider(widget.site));

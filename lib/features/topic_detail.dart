@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
+import '../core/block_list.dart';
 import '../core/forum_source.dart';
 import '../core/library.dart';
 import '../core/models.dart';
@@ -638,8 +639,23 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
     return n == 0 ? '还没有回复' : '$n 条回复';
   }
 
+  /// Replies from a blocked author the reader has asked to see anyway.
+  final _shown = <String>{};
+
+  /// Whether [reply] is drawn folded away: its author is blocked on this
+  /// site, and the reader has not opened it. Folded rather than dropped, so
+  /// the thread keeps its count and every reply keeps its place — which is
+  /// what the jump to a reply goes by.
+  bool _isHidden(Reply reply, BlockList blocks) {
+    final author = reply.author?.name;
+    return author != null &&
+        !_shown.contains(reply.id) &&
+        blocks.authors.contains(BlockList.entry(widget.topic.site, author));
+  }
+
   List<Widget> _replySlivers(
       AsyncValue<RepliesState> replies, ForumSource source) {
+    final blocks = ref.watch(settingsProvider.select((s) => s.blocks));
     final baseUrl = source.homeUrl;
     final act = source.like;
     return replies.when(
@@ -664,20 +680,26 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
           // `all` rather than the page: a reply written here sits at the end
           // of the thread, where its writer left it.
           itemCount: r.all.length,
-          itemBuilder: (context, i) => ReplyTile(
-            key: _replyKeys.putIfAbsent(r.all[i].id, GlobalKey.new),
-            first: i == 0,
-            reply: r.all[i],
-            baseUrl: baseUrl,
-            onTopicLink: _handleLink,
-            images: _images,
-            onLike: act == null
-                ? null
-                : (wanted) =>
-                    _like(act, r.all[i].id, wanted, replyId: r.all[i].id),
-            onReply:
-                source.reply == null ? null : () => _answer(r.all[i]),
-          ),
+          itemBuilder: (context, i) => _isHidden(r.all[i], blocks)
+              ? _HiddenReply(
+                  key: _replyKeys.putIfAbsent(r.all[i].id, GlobalKey.new),
+                  author: r.all[i].author!.name,
+                  onShow: () => setState(() => _shown.add(r.all[i].id)),
+                )
+              : ReplyTile(
+                  key: _replyKeys.putIfAbsent(r.all[i].id, GlobalKey.new),
+                  first: i == 0,
+                  reply: r.all[i],
+                  baseUrl: baseUrl,
+                  onTopicLink: _handleLink,
+                  images: _images,
+                  onLike: act == null
+                      ? null
+                      : (wanted) =>
+                          _like(act, r.all[i].id, wanted, replyId: r.all[i].id),
+                  onReply:
+                      source.reply == null ? null : () => _answer(r.all[i]),
+                ),
         ),
         SliverToBoxAdapter(
           child: Padding(
@@ -1108,6 +1130,33 @@ class _OfflineNote extends StatelessWidget {
               style: TextStyle(fontSize: 12, height: 1.35, color: p.inkMuted)),
         ),
         TextButton(onPressed: onRetry, child: const Text('重试')),
+      ]),
+    );
+  }
+}
+
+/// A reply from an author the reader has blocked, folded to one line that
+/// can be opened.
+class _HiddenReply extends StatelessWidget {
+  const _HiddenReply(
+      {super.key, required this.author, required this.onShow});
+
+  final String author;
+  final VoidCallback onShow;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(30, 6, 30, 6),
+      child: Row(children: [
+        Icon(Icons.visibility_off_outlined, size: 14, color: p.inkFaint),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text('已屏蔽 $author 的回复',
+              style: TextStyle(fontSize: 12, color: p.inkFaint)),
+        ),
+        TextButton(onPressed: onShow, child: const Text('显示')),
       ]),
     );
   }
