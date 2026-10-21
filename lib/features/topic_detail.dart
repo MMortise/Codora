@@ -318,6 +318,11 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
   /// The thread, with the offer floating over its top edge.
   Widget _overlaid(Widget thread) {
     final offer = _offer;
+    // A reload keeps the post on screen while it asks again, so without this
+    // nothing would say it had been asked at all — and a thread with nothing
+    // new in it would look like a shortcut that did nothing.
+    final reloading = ref.watch(topicDetailProvider(widget.topic)).isRefreshing ||
+        ref.watch(repliesProvider(widget.topic)).isRefreshing;
     return Stack(children: [
       Positioned.fill(
         child: NotificationListener<ScrollEndNotification>(
@@ -325,6 +330,9 @@ class _TopicDetailViewState extends ConsumerState<TopicDetailView> {
           child: thread,
         ),
       ),
+      if (reloading)
+        const Positioned(
+            left: 0, right: 0, top: 0, child: LinearProgressIndicator()),
       if (offer != null)
         Positioned(
           top: 12,

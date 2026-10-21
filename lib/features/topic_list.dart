@@ -238,9 +238,6 @@ class _TopicListPaneState extends ConsumerState<TopicListPane> {
                   );
                 },
               ),
-              if (feed.isLoading || state.refreshing)
-                const Positioned(
-                    left: 0, right: 0, top: 0, child: LinearProgressIndicator()),
               if (state.refreshError case final problem?)
                 Positioned(
                   left: 8,
