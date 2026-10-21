@@ -9,6 +9,7 @@ import '../app_theme.dart';
 import '../core/linuxdo_session.dart';
 import '../core/models.dart';
 import '../core/settings.dart';
+import '../core/util.dart';
 import '../widgets/chrome.dart';
 import 'providers.dart';
 
@@ -185,13 +186,29 @@ class _LinuxDoAuthPageState extends ConsumerState<LinuxDoAuthPage> {
   Future<void> _save() async {
     if (_saving) return;
     setState(() => _saving = true);
-    final cookies =
-        await CookieManager.instance().getCookies(url: WebUri('$linuxdoOrigin/'));
-    final header = cookies.map((c) => '${c.name}=${c.value}').join('; ');
-    await ref.read(settingsProvider.notifier).patch((s) =>
-        s.copyWith(linuxdoCookie: header, linuxdoUserAgent: kDesktopUserAgent));
-    ref.invalidate(sectionsProvider(SiteId.linuxdo));
-    if (mounted) Navigator.of(context).pop(true);
+    try {
+      final cookies = await CookieManager.instance()
+          .getCookies(url: WebUri('$linuxdoOrigin/'));
+      final header = cookies.map((c) => '${c.name}=${c.value}').join('; ');
+      await ref.read(settingsProvider.notifier).patch((s) => s.copyWith(
+          linuxdoCookie: header, linuxdoUserAgent: kDesktopUserAgent));
+      ref.invalidate(sectionsProvider(SiteId.linuxdo));
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      // Not left spinning. A save that threw used to leave this page busy
+      // for good, with the reason gone to a log nobody sees and a button that
+      // could not be pressed again. The button comes back, and the reason is
+      // said; it is not retried by itself, since whatever threw would throw
+      // again on every page the browser loads.
+      if (!mounted) return;
+      setState(() => _saving = false);
+      final p = context.palette;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('没能保存登录状态：${errorText(e)}'),
+        backgroundColor: p.raised,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
   }
 }
 

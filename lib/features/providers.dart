@@ -89,6 +89,28 @@ final updateProvider = FutureProvider.autoDispose<Release?>((ref) async {
 
 // ---------- settings ----------
 
+/// Puts linux.do credentials into the browser its requests run in, and drops
+/// the hidden page that still holds the old ones.
+///
+/// A provider so a test can stand in for it: the real one talks to WebKit's
+/// cookie store and its WebViews, neither of which exists under `flutter
+/// test`, which is how the step after it went untested.
+final linuxdoHandoverProvider = Provider<Future<void> Function(String cookie)>(
+  (_) => (cookie) async {
+    await applyLinuxDoCookies(cookie);
+    await WebViewFetcher.instance.reset(linuxdoOrigin);
+  },
+);
+
+/// Counts the times linux.do's browser has been handed new credentials.
+///
+/// Whatever has to read the site again once that has happened watches this.
+/// It cannot be told by the settings that did the handing over: what reads
+/// the site is built from those settings, so settings reaching back into it
+/// is a cycle — one Riverpod refuses in a debug build, by throwing from the
+/// middle of a save.
+final linuxdoHandoversProvider = StateProvider<int>((_) => 0);
+
 class SettingsNotifier extends Notifier<AppSettings> {
   @override
   AppSettings build() => AppSettings.bootstrap;
@@ -112,15 +134,14 @@ class SettingsNotifier extends Notifier<AppSettings> {
     // sends. The hidden WebView is then dropped, since it holds the old ones.
     if (next.linuxdoCookie != prev.linuxdoCookie ||
         next.linuxdoUserAgent != prev.linuxdoUserAgent) {
-      await applyLinuxDoCookies(next.linuxdoCookie);
-      await WebViewFetcher.instance.reset(linuxdoOrigin);
+      await ref.read(linuxdoHandoverProvider)(next.linuxdoCookie);
       // The new settings went out above, and with them the profile card set
       // off to read who is signed in now — through the WebView just dropped
       // under it, into the browser before it held the new credentials. Right
       // after signing in, that read came back saying the sign-in had failed
       // and the card kept saying so until its retry a minute later. It is
       // asked again now that the browser is ready for it.
-      ref.invalidate(memberProvider(SiteId.linuxdo));
+      ref.read(linuxdoHandoversProvider.notifier).state++;
     }
   }
 }
@@ -285,6 +306,10 @@ class MemberNotifier extends AutoDisposeFamilyAsyncNotifier<Member, SiteId> {
   @override
   Future<Member> build(SiteId arg) async {
     final fetch = ref.watch(sourceProvider(arg)).member;
+    // linux.do is read inside a browser that is handed its credentials after
+    // settings change, so a read started by the change itself can land before
+    // they have. Read again once they are there.
+    if (arg == SiteId.linuxdo) ref.watch(linuxdoHandoversProvider);
     final reading = Object();
     _reading = reading;
     ref.onDispose(() {
