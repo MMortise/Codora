@@ -115,6 +115,10 @@ class _Rail extends ConsumerWidget {
             ),
             label: '${source.name} · ${source.access.label}',
             selected: nav.site == source.id,
+            // Only the site on screen is asked: its list is already on its
+            // way, and watching another's would be what set one off.
+            busy: nav.site == source.id &&
+                ref.watch(listBusyProvider(source.id)),
             status: _statusColor(p, source.access.level),
             // Sites that can say who the reader is get a card instead of a
             // tooltip; the rest keep the tooltip. Reading the same field the
@@ -161,11 +165,17 @@ class _RailBlock extends StatelessWidget {
     required this.onTap,
     this.status,
     this.flyout,
+    this.busy = false,
   });
 
   final Widget icon;
   final String label;
   final bool selected;
+
+  /// The site's list is being asked for. Said here rather than over the list:
+  /// a bar across the top of the list covers the first title, and the rail is
+  /// where the eye already goes to see which site this is.
+  final bool busy;
   final VoidCallback onTap;
   final Color? status;
 
@@ -196,11 +206,19 @@ class _RailBlock extends StatelessWidget {
                 color: selected ? p.accentSoft : (hovered ? p.raised : p.panel),
                 borderRadius: BorderRadius.circular(Radii.block),
                 border: Border.all(
-                  color: selected ? p.accent : p.line,
+                  // Faded while the light runs round it, so the light is
+                  // what reads as the ring.
+                  color: selected
+                      ? (busy ? p.accent.withValues(alpha: 0.28) : p.accent)
+                      : p.line,
                   width: selected ? 1.6 : 1,
                 ),
               ),
-              child: Stack(children: [
+              child: Stack(clipBehavior: Clip.none, children: [
+                if (busy)
+                  const Positioned.fill(
+                    child: IgnorePointer(child: _BusyRing()),
+                  ),
                 Center(
                   child: IconTheme(
                     data: IconThemeData(
@@ -237,6 +255,85 @@ class _RailBlock extends StatelessWidget {
   }
 }
 
+/// A stretch of light running round a rail block's ring, for as long as the
+/// block's site is being asked for something.
+///
+/// It runs along the ring the block already wears, which fades while it
+/// does, so the block keeps its shape and only the line round it moves.
+class _BusyRing extends StatefulWidget {
+  const _BusyRing();
+
+  @override
+  State<_BusyRing> createState() => _BusyRingState();
+}
+
+class _BusyRingState extends State<_BusyRing>
+    with SingleTickerProviderStateMixin {
+  late final _turn = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1100))
+    ..repeat();
+
+  @override
+  void dispose() {
+    _turn.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return CustomPaint(
+      key: const ValueKey('rail-busy-ring'),
+      painter: _RingPainter(_turn, color: p.accent),
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  _RingPainter(this.turn, {required this.color}) : super(repaint: turn);
+
+  final Animation<double> turn;
+  final Color color;
+
+  /// How much of the way round the light reaches.
+  static const _reach = 0.32;
+
+  /// The block's own ring is this wide and drawn inside its edge; this is
+  /// painted inside it, so it has to reach back out by half of that to sit
+  /// on the ring's centre line.
+  static const _ring = 1.6;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const out = _ring / 2;
+    final ring = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+        (Offset.zero & size).inflate(out),
+        const Radius.circular(Radii.block - out),
+      ));
+    final metric = ring.computeMetrics().first;
+    final length = metric.length;
+    final start = turn.value * length;
+    final end = start + length * _reach;
+    // Past the end it carries on from the start, so it never shortens.
+    final light = metric.extractPath(start, end < length ? end : length);
+    if (end > length) {
+      light.addPath(metric.extractPath(0, end - length), Offset.zero);
+    }
+    canvas.drawPath(
+      light,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..strokeCap = StrokeCap.round
+        ..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_RingPainter old) => old.color != color;
+}
+
 class SitePage extends ConsumerWidget {
   const SitePage({super.key, required this.site});
   final SiteId site;
@@ -244,18 +341,12 @@ class SitePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final sectionsAsync = ref.watch(sectionsProvider(site));
-    final selected = ref.watch(selectedSectionProvider(site));
     final sections = sectionsAsync.valueOrNull ?? const <Section>[];
-    // A board remembered from last time is only used once the site confirms
-    // it still has one by that name; until the list is in, nothing is asked
-    // for rather than a board that may be gone.
-    final sectionId = sections.any((s) => s.id == selected)
-        ? selected
-        : (sections.isNotEmpty ? sections.first.id : null);
+    final sectionId = ref.watch(shownSectionProvider(site));
     // A search, while there is one, stands in the list's place; the board
     // underneath is still the one to go back to.
     final query = ref.watch(searchQueryProvider(site));
-    final listId = query == null ? sectionId : searchSectionId(query);
+    final listId = ref.watch(shownListProvider(site));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Padding(

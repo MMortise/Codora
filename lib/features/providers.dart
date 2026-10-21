@@ -639,6 +639,42 @@ final feedProvider =
 /// Filtered here rather than in the feed itself, so that blocking or
 /// unblocking something takes effect on what is already loaded instead of
 /// fetching it all again.
+/// The board a site's page is showing — the remembered one once the site
+/// confirms it still has it, else its first — or null until the site has said
+/// which boards it has.
+final shownSectionProvider = Provider.family<String?, SiteId>((ref, site) {
+  final selected = ref.watch(selectedSectionProvider(site));
+  final sections =
+      ref.watch(sectionsProvider(site)).valueOrNull ?? const <Section>[];
+  // A board remembered from last time is only used once the site confirms it
+  // still has one by that name; until the list is in, nothing is asked for
+  // rather than a board that may be gone.
+  if (sections.any((s) => s.id == selected)) return selected;
+  return sections.isNotEmpty ? sections.first.id : null;
+});
+
+/// The list a site's page is showing: a search, while there is one, stands
+/// in the board's place.
+final shownListProvider = Provider.family<String?, SiteId>((ref, site) {
+  final query = ref.watch(searchQueryProvider(site));
+  return query == null
+      ? ref.watch(shownSectionProvider(site))
+      : searchSectionId(query);
+});
+
+/// Whether the list a site's page is showing is being asked for — the first
+/// time, or again.
+///
+/// Watches only a list that is already on its way: a site whose page has not
+/// settled on one has nothing to say, and asking here must not be what sets
+/// a fetch off.
+final listBusyProvider = Provider.family<bool, SiteId>((ref, site) {
+  final list = ref.watch(shownListProvider(site));
+  if (list == null) return false;
+  final feed = ref.watch(feedProvider(FeedKey(site, list)));
+  return feed.isLoading || (feed.valueOrNull?.refreshing ?? false);
+});
+
 final visibleFeedProvider =
     Provider.family<AsyncValue<FeedState>, FeedKey>((ref, key) {
   final feed = ref.watch(feedProvider(key));
