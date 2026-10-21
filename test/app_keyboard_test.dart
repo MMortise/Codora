@@ -1,6 +1,8 @@
 // The app's keyboard sits above every page and turns keys into commands for
 // the list and the reading pane. What it must never do is take a key that
 // someone is typing, or the space bar from a button that has focus.
+import 'dart:async';
+
 import 'package:codora/app_theme.dart';
 import 'package:codora/core/models.dart';
 import 'package:codora/core/settings.dart';
@@ -30,6 +32,19 @@ class _LongTopic extends FakeSource {
   @override
   Future<PageResult<Reply>> fetchReplies(String id, {String? cursor}) async =>
       const PageResult(items: []);
+}
+
+/// The same topic, whose second reading is held open until the test lets it
+/// go — a reload in flight, to look at.
+class _HeldReload extends _LongTopic {
+  int reads = 0;
+  final second = Completer<void>();
+
+  @override
+  Future<TopicDetail> fetchTopic(String id) async {
+    if (++reads > 1) await second.future;
+    return super.fetchTopic(id);
+  }
 }
 
 void main() {
@@ -88,6 +103,24 @@ void main() {
       await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      expect(detailCommand(c), DetailCommand.reload);
+    });
+
+    testWidgets('and so do the command key ones a Mac reader reaches for',
+        (tester) async {
+      // ⌘R is what refreshes everywhere else on a Mac, and it used to be
+      // dropped here without a word.
+      final c = await pumpKeyboard(tester, const SizedBox());
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      expect(listCommand(c), ListCommand.refresh);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
       expect(detailCommand(c), DetailCommand.reload);
     });
 
@@ -294,6 +327,43 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.keyG);
       await tester.pumpAndSettle();
       expect(offset(tester), 0);
+    });
+
+    testWidgets('says it is reloading while it asks again', (tester) async {
+      // The post stays on screen while a reload is in flight, so this bar is
+      // the only sign that the key did anything — and a thread with nothing
+      // new in it would otherwise look like a shortcut that did nothing.
+      final source = _HeldReload();
+      await pumpKeyboard(
+        tester,
+        TopicDetailView(
+          topic: const TopicRef(SiteId.v2ex, '1'),
+          canGoBack: false,
+          onBack: () {},
+          onOpenTopic: (_) {},
+        ),
+        overrides: [sourceProvider(SiteId.v2ex).overrideWithValue(source)],
+      );
+      final bar = find.descendant(
+          of: find.byType(TopicDetailView),
+          matching: find.byType(LinearProgressIndicator));
+      expect(bar, findsNothing);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      // Pumped rather than settled: the bar is an animation that runs until
+      // the reload lands.
+      await tester.pump();
+      await tester.pump();
+      expect(source.reads, 2, reason: 'it really asked again');
+      expect(bar, findsOneWidget);
+      expect(find.text('一篇很长的帖子'), findsOneWidget,
+          reason: 'with the post still there to read meanwhile');
+
+      source.second.complete();
+      await tester.pumpAndSettle();
+      expect(bar, findsNothing);
     });
 
     testWidgets('copies its link', (tester) async {

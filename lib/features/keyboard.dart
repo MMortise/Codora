@@ -52,8 +52,8 @@ const kShortcuts = <(String keys, String what)>[
   ('↓ / ↑', '列表里下一篇 / 上一篇'),
   ('空格 / ⇧ 空格', '正文向下 / 向上翻一屏'),
   ('G G / ⇧ G', '正文回到顶部 / 跳到底部'),
-  ('R', '刷新列表'),
-  ('⇧ R', '重新加载正在读的帖子'),
+  ('R 或 ⌘ R', '刷新列表'),
+  ('⇧ R 或 ⌘ ⇧ R', '重新加载正在读的帖子'),
   ('O', '在浏览器中打开正在读的帖子'),
   ('C', '复制正在读的帖子的链接'),
   ('⌘ F 或 /', '搜索当前站点'),
@@ -123,6 +123,19 @@ class _AppKeyboardState extends ConsumerState<AppKeyboard> {
       if (key == LogicalKeyboardKey.keyF) {
         if (ref.read(currentNavProvider).site case final site?) {
           ref.read(searchRequestProvider(site).notifier).state++;
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      }
+      // ⌘R is what refreshes everywhere else on a Mac, and the first thing a
+      // reader tries; the plain R below stays for anyone who learnt that one.
+      if (key == LogicalKeyboardKey.keyR) {
+        if (ref.read(currentNavProvider).site case final site?) {
+          if (shift) {
+            sendDetailCommand(ref, site, DetailCommand.reload);
+          } else {
+            sendListCommand(ref, site, ListCommand.refresh);
+          }
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
